@@ -128,7 +128,7 @@ def segment_blood(
     cleaned = cv2.morphologyEx(closed, cv2.MORPH_OPEN, _OPEN_KERNEL)
 
     # ── 5. Contour extraction & geometric filtering ──
-    contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE) #raster scan, 
 
     centroids: list[dict] = []
     polygons: list[np.ndarray] = []
@@ -159,7 +159,7 @@ def segment_blood(
 
         # Polygon simplification
         eps = 0.015 * cv2.arcLength(cnt, closed=True)
-        approx = cv2.approxPolyDP(cnt, eps, closed=True)
+        approx = cv2.approxPolyDP(cnt, eps, closed=True) #Douglas-Peucker Algorithm
 
         stain_type = "pool" if area > _POOL_THRESHOLD_PX else "spatter"
         centroids.append({"cx": cx, "cy": cy, "area": float(area), "type": stain_type})
