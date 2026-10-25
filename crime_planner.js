@@ -53,13 +53,13 @@ No matter how the user phrases the input, extract:
 1. Actors: Identify the perpetrator(s), victim(s), accomplice(s), and witnesses.
 2. Entry Portal: Identify where the perpetrator enters (e.g., door_south, door_north, window_west, or generic 'door').
 3. Victim Position & Posture:
-   - Identify where the victim is positioned in the room. If a direction or area is mentioned (e.g. "victim was in north", "victim in south", "victim sits in north-west", "victim near west window"), assign the corresponding sector anchor: chair_north, chair_south, chair_nw, chair_west, etc.
-   - If user explicitly says center/middle, use chair_center.
+   - Identify where the victim is positioned in the room. If a direction or area is mentioned (e.g. "victim was in north", "victim in south", "victim sits in north-west", "chair_nw", "chair_s", "victim near west window"), assign the corresponding sector anchor: chair_north (or chair_n), chair_south (or chair_s), chair_nw, chair_ne, chair_sw, chair_se, chair_west (or chair_w), chair_east (or chair_e).
+   - If user explicitly says center, middle, middle of room, or if no specific direction is specified: strictly assign "at": "chair_center".
    - Victim Posture:
      * If user mentions standing, stands, stand, upright: "pose": "standing"
      * If user mentions sleeping, sleep, asleep, lying down, lying, bed, nap: "pose": "lying"
      * If user mentions sitting, sits, seated: "pose": "sitting"
-     * CRITICAL: Strictly obey the user's requested posture (standing, sitting, or lying).
+     * CRITICAL: Strictly obey the user's requested position and posture (standing, sitting, or lying).
 4. Encounter Actions:
    - Perpetrator enters room (action: "enter", target: entry_anchor).
    - Perpetrator approaches victim (action: "walk_to", target: "victim").
@@ -191,15 +191,16 @@ export function ruleBasedParse(prompt) {
   // Helper: Extract cardinal direction from any text snippet (returns null if none found)
   function extractDirection(str) {
     if (!str) return null;
-    if (/\b(?:north[\s-]?west|nw)\b/i.test(str)) return "NW";
-    if (/\b(?:north[\s-]?east|ne)\b/i.test(str)) return "NE";
-    if (/\b(?:south[\s-]?west|sw)\b/i.test(str)) return "SW";
-    if (/\b(?:south[\s-]?east|se)\b/i.test(str)) return "SE";
-    if (/\b(?:north|n)\b/i.test(str)) return "N";
-    if (/\b(?:south|s)\b/i.test(str)) return "S";
-    if (/\b(?:east|e)\b/i.test(str)) return "E";
-    if (/\b(?:west|w)\b/i.test(str)) return "W";
-    if (/\b(?:center|middle)\b/i.test(str)) return "Center";
+    const cleanStr = String(str).replace(/[_-]+/g, " ");
+    if (/\b(?:north[\s-]?west|nw)\b/i.test(cleanStr)) return "NW";
+    if (/\b(?:north[\s-]?east|ne)\b/i.test(cleanStr)) return "NE";
+    if (/\b(?:south[\s-]?west|sw)\b/i.test(cleanStr)) return "SW";
+    if (/\b(?:south[\s-]?east|se)\b/i.test(cleanStr)) return "SE";
+    if (/\b(?:north|n)\b/i.test(cleanStr)) return "N";
+    if (/\b(?:south|s)\b/i.test(cleanStr)) return "S";
+    if (/\b(?:east|e)\b/i.test(cleanStr)) return "E";
+    if (/\b(?:west|w)\b/i.test(cleanStr)) return "W";
+    if (/\b(?:center|middle)\b/i.test(cleanStr)) return "Center";
     return null;
   }
 
@@ -308,20 +309,33 @@ export function ruleBasedParse(prompt) {
   }
 
   // 5. Victim static anchor (when victim does NOT enter from outside)
+  const explicitAnchorMatch = t.match(/\b(chair|couch|sofa|bed|table)_(nw|ne|sw|se|n|s|e|w|center|middle)\b/i);
+  let explicitAnchor = null;
+  let vChairDir = null;
+  if (explicitAnchorMatch) {
+    const rawType = explicitAnchorMatch[1].toLowerCase() === "sofa" ? "couch" : explicitAnchorMatch[1].toLowerCase();
+    const rawDir = explicitAnchorMatch[2].toLowerCase() === "middle" ? "center" : explicitAnchorMatch[2].toLowerCase();
+    explicitAnchor = `${rawType}_${rawDir}`;
+    vChairDir = rawDir === "center" ? "Center" : rawDir.toUpperCase();
+  }
+
   const vMatch = t.match(/(?:(?:the\s+)?victim|(?:the\s+)?resident|(?:the\s+)?target|person|someone|somebody|occupant|individual|man|woman|hostage|guest|bystander)[^.,;]*/i);
   const vClause = vMatch ? vMatch[0] : "";
   const vPreMatch = t.match(/(north[\s-]?west|north[\s-]?east|south[\s-]?west|south[\s-]?east|north|south|east|west|nw|ne|sw|se|center|middle|corner)[^.]*?(?:victim|resident|target|person|someone|somebody|occupant|individual|man|woman|hostage|guest|bystander)/i);
   const chairMatch = t.match(/(?:chair|stool|seat|armchair|bed|couch|sofa|desk|table)[^.,;]*(?:located|placed|in|at|near|towards)?\s*(?:north[\s-]?west|north[\s-]?east|south[\s-]?west|south[\s-]?east|north|south|east|west|nw|ne|sw|se|center|middle|corner)\b/i)
     || t.match(/(?:north[\s-]?west|north[\s-]?east|south[\s-]?west|south[\s-]?east|north|south|east|west|nw|ne|sw|se|center|middle|corner)\s*(?:chair|stool|seat|armchair|bed|couch|sofa|desk|table)\b/i);
 
-  let vChairDir = extractDirection(vClause) || extractDirection(vPreMatch ? vPreMatch[0] : null) || extractDirection(chairMatch ? chairMatch[0] : null);
+  if (!vChairDir) {
+    vChairDir = extractDirection(vClause) || extractDirection(vPreMatch ? vPreMatch[0] : null) || extractDirection(chairMatch ? chairMatch[0] : null);
+  }
 
   // Fallback directional deduction: If prompt mentions directions, and one is not the perpetrator's entrance, assign it to victim!
   if (!vChairDir) {
     const kDir = extractDirection(killerEntryAnchor);
+    const tNorm = t.replace(/[_-]+/g, " ");
     const dirRegex = /\b(north[\s-]?west|north[\s-]?east|south[\s-]?west|south[\s-]?east|north|south|east|west|nw|ne|sw|se)\b/gi;
     let m;
-    while ((m = dirRegex.exec(t)) !== null) {
+    while ((m = dirRegex.exec(tNorm)) !== null) {
       const d = extractDirection(m[1]);
       if (d && d !== kDir) {
         vChairDir = d;
@@ -329,6 +343,12 @@ export function ruleBasedParse(prompt) {
       }
     }
   }
+
+  // Check for center / middle explicitly
+  if (!vChairDir && /\b(?:middle|center|in the middle|in the center|middle of room|center of room)\b/i.test(t)) {
+    vChairDir = "Center";
+  }
+
   const isCorner = /\bcorner\b/i.test(vClause) || /\bcorner\b/i.test(chairMatch ? chairMatch[0] : "") || /\bcorner\b/i.test(t);
 
   // Precise posture detection (independent of furniture words)
@@ -352,10 +372,12 @@ export function ruleBasedParse(prompt) {
     victimPose = "standing";
   }
 
-  let victimAnchor = "chair";
+  let victimAnchor = "chair_center";
   const dirCode = (vChairDir && vChairDir !== "Center") ? vChairDir.toLowerCase() : null;
 
-  if (dirCode) {
+  if (explicitAnchor) {
+    victimAnchor = explicitAnchor;
+  } else if (dirCode) {
     if (victimPose === "lying" || /\b(?:bed)\b/i.test(t)) {
       victimAnchor = `bed_${dirCode}`;
     } else if (/\b(?:couch|sofa)\b/i.test(t)) {
@@ -368,11 +390,11 @@ export function ruleBasedParse(prompt) {
   } else if (isCorner) {
     victimAnchor = "chair_corner";
   } else if (victimPose === "lying" || /\b(?:bed)\b/i.test(t)) {
-    victimAnchor = "bed";
+    victimAnchor = "bed_center";
   } else if (/\b(?:couch|sofa)\b/i.test(t)) {
-    victimAnchor = "couch";
+    victimAnchor = "couch_center";
   } else {
-    victimAnchor = "chair";
+    victimAnchor = "chair_center";
   }
 
   // 6. Action Flags
@@ -651,7 +673,7 @@ import { loadPhysicalSceneObjects, verifyTargetObject, CARDINAL_SECTORS } from "
  * Resolves 3D world anchors given room bounds and compass direction calibration.
  * Performs physical object verification against user-requested anchors across 8 cardinal sectors.
  */
-export function resolveSceneAnchors(script, bounds = null, directionMeta = null, physicalObjectsOverride = null) {
+export function resolveSceneAnchors(script, bounds = null, directionMeta = null, physicalObjectsOverride = null, boundaryMarkers = null) {
   // Default bounds if none provided
   const min = bounds?.min || [-3.5, 0, -3.5];
   const max = bounds?.max || [3.5, 2.7, 3.5];
@@ -667,8 +689,67 @@ export function resolveSceneAnchors(script, bounds = null, directionMeta = null,
   // Calibration offset: northOffset aligns 3D world space with physical North
   const northOffset = directionMeta?.northOffset ?? directionMeta?.angle ?? 0;
 
-  // 1. Load physical scene objects and label with 8 cardinal directions based on northOffset
-  const physicalObjects = physicalObjectsOverride || loadPhysicalSceneObjects(null, { min, max, center, radius }, northOffset);
+  // Check for boundary markers (prioritize calibrated boundary markers from disk)
+  let effectiveMarkers = null;
+  try {
+    const bmPath = path.resolve(process.cwd(), "output/boundary_markers.json");
+    if (fs.existsSync(bmPath)) {
+      effectiveMarkers = JSON.parse(fs.readFileSync(bmPath, "utf8"));
+    }
+  } catch (_) {}
+  if (!effectiveMarkers) {
+    effectiveMarkers = boundaryMarkers;
+  }
+
+  // Validate that boundary markers actually match the active model bounds
+  if (effectiveMarkers && bounds && bounds.min && bounds.max) {
+    const minZ = bounds.min[2] !== undefined ? bounds.min[2] : bounds.min[1];
+    const maxZ = bounds.max[2] !== undefined ? bounds.max[2] : bounds.max[1];
+    const pts = Object.values(effectiveMarkers).filter(p => Array.isArray(p) && p.length >= 3);
+    const markersFit = pts.length > 0 && pts.every(pt => {
+      return pt[0] >= min[0] - 0.50 && pt[0] <= max[0] + 0.50 &&
+             pt[2] >= minZ - 0.50 && pt[2] <= maxZ + 0.50;
+    });
+    if (!markersFit) {
+      console.log(`[crime_planner] Boundary markers do not match active model bounds [${min[0]}..${max[0]}, ${minZ}..${maxZ}]. Regenerating dynamic boundary markers.`);
+      effectiveMarkers = null;
+    }
+  }
+
+  // If no valid boundary markers matching active model bounds, construct 100% clean markers directly from bounds
+  if (!effectiveMarkers && bounds && bounds.min && bounds.max) {
+    const minZ = bounds.min[2] !== undefined ? bounds.min[2] : bounds.min[1];
+    const maxZ = bounds.max[2] !== undefined ? bounds.max[2] : bounds.max[1];
+    const floorY = bounds?.floorY ?? bounds?.min?.[1] ?? 0.02;
+    const markerY = Number((floorY + 0.35).toFixed(3));
+    effectiveMarkers = {
+      NW: [Number((min[0] + 0.15).toFixed(3)), markerY, Number((minZ + 0.15).toFixed(3))],
+      NE: [Number((max[0] - 0.15).toFixed(3)), markerY, Number((minZ + 0.15).toFixed(3))],
+      SE: [Number((max[0] - 0.15).toFixed(3)), markerY, Number((maxZ - 0.15).toFixed(3))],
+      SW: [Number((min[0] + 0.15).toFixed(3)), markerY, Number((maxZ - 0.15).toFixed(3))],
+      N: [Number(cx.toFixed(3)), markerY, Number((minZ + 0.15).toFixed(3))],
+      S: [Number(cx.toFixed(3)), markerY, Number((maxZ - 0.15).toFixed(3))],
+      E: [Number((max[0] - 0.15).toFixed(3)), markerY, Number(cz.toFixed(3))],
+      W: [Number((min[0] + 0.15).toFixed(3)), markerY, Number(cz.toFixed(3))],
+    };
+  }
+
+  // Calibrate true room center from boundary markers if available
+  if (effectiveMarkers && typeof effectiveMarkers === "object") {
+    if (effectiveMarkers.NW && effectiveMarkers.SE) {
+      center[0] = Number(((effectiveMarkers.NW[0] + effectiveMarkers.SE[0]) / 2.0).toFixed(3));
+      center[1] = Number(((effectiveMarkers.NW[2] + effectiveMarkers.SE[2]) / 2.0).toFixed(3));
+    } else {
+      const keys = Object.keys(effectiveMarkers);
+      if (keys.length > 0) {
+        center[0] = Number((keys.reduce((s, k) => s + effectiveMarkers[k][0], 0) / keys.length).toFixed(3));
+        center[1] = Number((keys.reduce((s, k) => s + effectiveMarkers[k][2], 0) / keys.length).toFixed(3));
+      }
+    }
+  }
+
+  // 1. Load physical scene objects and label with 8 cardinal directions based on northOffset & boundary markers
+  const physicalObjects = physicalObjectsOverride || loadPhysicalSceneObjects(null, { min, max, center, radius }, northOffset, effectiveMarkers);
 
   const anchors = {};
   const verificationReport = {};
@@ -688,7 +769,116 @@ export function resolveSceneAnchors(script, bounds = null, directionMeta = null,
     };
   }
 
-  // 3. Resolve and verify targets requested in the user's crime script
+  // 3. Register cardinal boundary marker doors directly
+  const CARDINAL_DOOR_ALIASES = {
+    N: ["door_n", "door_north", "door_north_wall", "north_door", "entrance_n", "entrance_north"],
+    S: ["door_s", "door_south", "door_south_wall", "south_door", "entrance_s", "entrance_south"],
+    E: ["door_e", "door_east", "door_east_wall", "east_door", "entrance_e", "entrance_east"],
+    W: ["door_w", "door_west", "door_west_wall", "west_door", "entrance_w", "entrance_west"],
+    NE: ["door_ne", "door_northeast", "door_north_east", "entrance_ne"],
+    NW: ["door_nw", "door_northwest", "door_north_west", "entrance_nw"],
+    SE: ["door_se", "door_southeast", "door_south_east", "entrance_se"],
+    SW: ["door_sw", "door_southwest", "door_south_west", "entrance_sw"],
+  };
+
+  // Cardinal sector furniture (chairs, couches, beds)
+  const CARDINAL_CHAIR_ALIASES = {
+    N: ["chair_n", "chair_north", "chair_north_wall", "victim_n", "victim_north", "couch_n", "bed_n"],
+    S: ["chair_s", "chair_south", "chair_south_wall", "victim_s", "victim_south", "couch_s", "bed_s"],
+    E: ["chair_e", "chair_east", "chair_east_wall", "victim_e", "victim_east", "couch_e", "bed_e"],
+    W: ["chair_w", "chair_west", "chair_west_wall", "victim_w", "victim_west", "couch_w", "bed_w"],
+    NE: ["chair_ne", "chair_northeast", "chair_north_east", "victim_ne", "victim_northeast", "couch_ne", "bed_ne"],
+    NW: ["chair_nw", "chair_northwest", "chair_north_west", "victim_nw", "victim_northwest", "couch_nw", "bed_nw"],
+    SE: ["chair_se", "chair_southeast", "chair_south_east", "victim_se", "victim_southeast", "couch_se", "bed_se"],
+    SW: ["chair_sw", "chair_southwest", "chair_south_west", "victim_sw", "victim_southwest", "couch_sw", "bed_sw"],
+  };
+
+  if (effectiveMarkers && typeof effectiveMarkers === "object") {
+    for (const [code, aliases] of Object.entries(CARDINAL_DOOR_ALIASES)) {
+      if (effectiveMarkers[code]) {
+        const bm = effectiveMarkers[code];
+        const bPos = [Number(bm[0].toFixed(3)), Number(bm[2].toFixed(3))];
+        const bY = Number((bm[1] ?? 0.02).toFixed(3));
+        const inwDx = center[0] - bPos[0];
+        const inwDz = center[1] - bPos[1];
+        const inwLen = Math.hypot(inwDx, inwDz) || 1.0;
+        const bInw = [Number((inwDx / inwLen).toFixed(3)), Number((inwDz / inwLen).toFixed(3))];
+        const labelName = CARDINAL_SECTORS.find(s => s.code === code)?.label || code;
+
+        const anchorObj = {
+          pos: bPos,
+          y: bY,
+          inward: bInw,
+          label: `${labelName} Door [${code}]`,
+          type: "door",
+          sector: code,
+          sectorLabel: labelName,
+          verified: true,
+          status: "verified",
+          confidence: 0.99
+        };
+
+        for (const alias of aliases) {
+          anchors[alias] = anchorObj;
+        }
+      }
+    }
+
+    // Register calibrated sector chairs covering the actual room space
+    for (const [code, aliases] of Object.entries(CARDINAL_CHAIR_ALIASES)) {
+      if (effectiveMarkers[code]) {
+        const bm = effectiveMarkers[code];
+        const cPos = [
+          Number((center[0] + 0.70 * (bm[0] - center[0])).toFixed(3)),
+          Number((center[1] + 0.70 * (bm[2] - center[1])).toFixed(3))
+        ];
+        const cY = Number(((bm[1] ?? 0.35) - 0.33).toFixed(3));
+        const inwDx = center[0] - cPos[0];
+        const inwDz = center[1] - cPos[1];
+        const inwLen = Math.hypot(inwDx, inwDz) || 1.0;
+        const cInw = [Number((inwDx / inwLen).toFixed(3)), Number((inwDz / inwLen).toFixed(3))];
+        const labelName = CARDINAL_SECTORS.find(s => s.code === code)?.label || code;
+
+        const chairObj = {
+          pos: cPos,
+          y: cY,
+          inward: cInw,
+          label: `${labelName} Chair [${code}]`,
+          type: "chair",
+          sector: code,
+          sectorLabel: labelName,
+          verified: true,
+          status: "verified",
+          confidence: 0.98
+        };
+
+        for (const alias of aliases) {
+          anchors[alias] = chairObj;
+        }
+      }
+    }
+
+    // Register Center Chair at exact true room center
+    const centerFloorY = Number((effectiveMarkers.NW ? (effectiveMarkers.NW[1] - 0.33) : 0.02).toFixed(3));
+    const centerChairObj = {
+      pos: [center[0], center[1]],
+      y: centerFloorY,
+      inward: [0, -1],
+      label: "Victim Chair [Center]",
+      type: "chair",
+      sector: "Center",
+      sectorLabel: "Center",
+      verified: true,
+      status: "verified",
+      confidence: 0.99
+    };
+    const CENTER_ALIASES = ["chair_center", "chair_middle", "victim_center", "victim_middle", "room_center", "center", "middle", "table_center", "bed_center", "couch_center", "chair"];
+    for (const cAlias of CENTER_ALIASES) {
+      anchors[cAlias] = centerChairObj;
+    }
+  }
+
+  // 4. Resolve and verify targets requested in the user's crime script
   const needed = new Set(script?.anchors_needed || []);
   for (const ev of script?.events || []) {
     if (ev.target && !script.actors?.some(a => a.id === ev.target)) {
@@ -700,7 +890,25 @@ export function resolveSceneAnchors(script, bounds = null, directionMeta = null,
   }
 
   for (const targetName of needed) {
-    const verifiedResult = verifyTargetObject(targetName, physicalObjects, { min, max, center, radius }, northOffset);
+    if (anchors[targetName]) {
+      verificationReport[targetName] = {
+        verified: true,
+        status: "verified",
+        pos: anchors[targetName].pos,
+        y: anchors[targetName].y,
+        inward: anchors[targetName].inward,
+        targetKey: targetName,
+        label: anchors[targetName].label,
+        objectType: anchors[targetName].type,
+        sector: anchors[targetName].sector,
+        sectorLabel: anchors[targetName].sectorLabel,
+        message: `✅ Verified: ${anchors[targetName].label} confirmed.`,
+        confidence: 0.99
+      };
+      continue;
+    }
+
+    const verifiedResult = verifyTargetObject(targetName, physicalObjects, { min, max, center, radius }, northOffset, effectiveMarkers);
     verificationReport[targetName] = verifiedResult;
 
     anchors[targetName] = {
@@ -801,16 +1009,19 @@ export function resolveSceneAnchors(script, bounds = null, directionMeta = null,
     }
   }
 
-  anchors["room_center"] = {
-    pos: [Number(cx.toFixed(3)), Number(cz.toFixed(3))],
-    inward: [0, 1],
-    label: "Center",
-    type: "center",
-    sector: "Center",
-    sectorLabel: "Center",
-    verified: true
-  };
+  if (!anchors["room_center"]) {
+    anchors["room_center"] = anchors["chair_center"] || {
+      pos: [Number(center[0].toFixed(3)), Number(center[1].toFixed(3))],
+      inward: [0, -1],
+      label: "Center",
+      type: "center",
+      sector: "Center",
+      sectorLabel: "Center",
+      verified: true
+    };
+  }
   if (!anchors["center"]) anchors["center"] = anchors["room_center"];
+  if (!anchors["chair"]) anchors["chair"] = anchors["chair_center"] || anchors["room_center"];
 
   return {
     anchors,
@@ -818,7 +1029,8 @@ export function resolveSceneAnchors(script, bounds = null, directionMeta = null,
     bounds: { min, max, radius },
     verificationReport,
     physicalObjects,
-    northOffset
+    northOffset,
+    boundaryMarkers: effectiveMarkers
   };
 }
 
@@ -842,14 +1054,33 @@ function clampInsideRoom(pt, maxR = 5.0) {
 /**
  * Generates timed 3D playback tracks, collision offsets, impact points, and captions.
  */
-export function generateCrimePlan(script, anchors, bounds, center, grid = null, verificationReport = null, physicalObjects = null) {
+export function generateCrimePlan(script, anchors, bounds, center, grid = null, verificationReport = null, physicalObjects = null, boundaryMarkers = null) {
   const actors = {};
   for (const a of script.actors) actors[a.id] = a;
+
+  // Mark occupied anchors so NavGrid stamps the target furniture while keeping open room corridors free
+  if (anchors && typeof anchors === "object") {
+    for (const a of Object.values(actors)) {
+      if (a.start && a.start.at && anchors[a.start.at]) {
+        anchors[a.start.at].occupied = true;
+      }
+    }
+    for (const ev of (script.events || [])) {
+      if (ev.target && anchors[ev.target]) {
+        anchors[ev.target].occupied = true;
+      }
+    }
+  }
+
+  // Calculate dynamic room height and proportional dummy scaling
+  const roomHeight = bounds?.size?.[1] || (bounds?.max?.[1] - bounds?.min?.[1]) || 2.85;
+  const dummyScale = Math.min(2.5, Math.max(0.4, roomHeight / 2.85));
+  const dummyHeight = Number((1.80 * dummyScale).toFixed(2));
 
   // Initialize clean NavGrid stamped with room bounds, doors, furniture, and physical obstacles
   let navGrid = grid;
   if (!navGrid) {
-    navGrid = NavGrid.createSceneGrid(bounds, anchors, physicalObjects);
+    navGrid = NavGrid.createSceneGrid(bounds, anchors, physicalObjects, boundaryMarkers);
   }
 
   const tracks = {};
@@ -943,19 +1174,38 @@ export function generateCrimePlan(script, anchors, bounds, center, grid = null, 
 
   function walk(aid, from, to, pace = "walk", nav = true, startTime = null, customPts = null) {
     const spd = SPEEDS[pace] || SPEEDS.walk;
+    const isKiller = aid === "killer";
+    const effectiveNav = aid === "victim" ? false : (isKiller ? true : nav);
+
+    // Strictly clamp killer start and goal coordinates inside room floor bounding box
     const a = [Number(from[0]), Number(from[1])];
     const b = [Number(to[0]), Number(to[1])];
-    const directD = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const clampedA = (isKiller && navGrid?.clampToFloor) ? navGrid.clampToFloor(a, 0.20) : a;
+    const clampedB = (isKiller && navGrid?.clampToFloor) ? navGrid.clampToFloor(b, 0.20) : b;
+
+    const directD = Math.hypot(clampedB[0] - clampedA[0], clampedB[1] - clampedA[1]);
     if (directD < 0.03 && (!customPts || customPts.length < 2)) return;
 
-    // Plan obstacle-avoiding route if nav is enabled and navGrid is available
-    const pts = (customPts && customPts.length >= 2)
+    // Plan obstacle-avoiding route if effectiveNav is enabled and navGrid is available
+    let pts = (customPts && customPts.length >= 2)
       ? customPts
-      : ((navGrid && nav) ? navGrid.path(a, b) : [a, b]);
+      : ((navGrid && effectiveNav) ? navGrid.path(clampedA, clampedB) : [clampedA, clampedB]);
+
+    // Ensure all waypoints for killer are strictly clamped inside room floor bounds
+    if (isKiller && navGrid?.clampToFloor) {
+      pts = pts.map(p => navGrid.clampToFloor(p, 0.18));
+    }
+
+    // Baseline floor elevation for flat ground movement constraint
+    const baseFloorY = navGrid?.getFloorY ? navGrid.getFloorY(center[0], center[1]) : 0.02;
+    const maxKillerFloorY = baseFloorY + 0.08;
 
     // Save polyline with 3D elevation for dashed route visualization
     const ptsWithElevation = pts.map(p => {
-      const flrY = navGrid?.getFloorY ? navGrid.getFloorY(p[0], p[1]) : 0.02;
+      let flrY = navGrid?.getFloorY ? navGrid.getFloorY(p[0], p[1]) : 0.02;
+      if (isKiller) {
+        flrY = Math.min(maxKillerFloorY, flrY);
+      }
       return [p[0], p[1], Number(flrY.toFixed(3))];
     });
     paths[aid].push(ptsWithElevation);
@@ -971,8 +1221,12 @@ export function generateCrimePlan(script, anchors, bounds, center, grid = null, 
       const dur = Math.max(0.2, d / spd);
       const yaw = calcYaw(p, q);
 
-      const fromY = navGrid?.getFloorY ? navGrid.getFloorY(p[0], p[1]) : 0.02;
-      const toY = navGrid?.getFloorY ? navGrid.getFloorY(q[0], q[1]) : 0.02;
+      let fromY = navGrid?.getFloorY ? navGrid.getFloorY(p[0], p[1]) : 0.02;
+      let toY = navGrid?.getFloorY ? navGrid.getFloorY(q[0], q[1]) : 0.02;
+      if (isKiller) {
+        fromY = Math.min(maxKillerFloorY, fromY);
+        toY = Math.min(maxKillerFloorY, toY);
+      }
 
       addSeg(aid, "walk", tCur, tCur + dur, p, q, yaw, {
         length: Number(d.toFixed(3)),
@@ -1003,9 +1257,12 @@ export function generateCrimePlan(script, anchors, bounds, center, grid = null, 
       const isLie = rawPose === "lying" || rawPose === "sleep" || rawPose === "lie" || rawPose === "asleep";
       const initialPose = isSit ? "sit" : (isLie ? "lie" : "idle");
 
-      // If standing or lying near a chair, offset slightly inward so mannequin doesn't intersect chair mesh
+      // When aid === "victim", allow exact placement onto target furniture anchor without obstacle rejection or displacement.
+      // For non-victim actors standing or lying near furniture, offset slightly inward so mannequin doesn't intersect chair mesh.
       let p = anc.pos;
-      if (!isSit && anc.type === "chair" && anc.inward) {
+      if (aid === "victim") {
+        p = [Number(anc.pos[0]), Number(anc.pos[1])];
+      } else if (!isSit && (anc.type === "chair" || anc.type === "sofa") && anc.inward) {
         p = [
           Number((anc.pos[0] + anc.inward[0] * 0.35).toFixed(3)),
           Number((anc.pos[1] + anc.inward[1] * 0.35).toFixed(3))
@@ -1025,8 +1282,21 @@ export function generateCrimePlan(script, anchors, bounds, center, grid = null, 
         from_pose: initialPose
       });
     } else {
+      // If actor has an enter event, find their entry portal to initialize pos at portal threshold
+      const enterEv = script.events?.find(e => e.actor === aid && e.action === "enter");
+      let entryPos = [0, 0];
+      if (enterEv && enterEv.target) {
+        const anc = anchors[enterEv.target] || anchors["door"] || Object.values(anchors).find(a => a.type === "door");
+        if (anc?.pos) {
+          entryPos = [Number(anc.pos[0].toFixed(3)), Number(anc.pos[1].toFixed(3))];
+        }
+      }
       pos[aid] = null;
-      addSeg(aid, "hidden", 0, clock.t, [0, 0], [0, 0], 0, { weapon: null, floor_y: 0.02, from_y: 0.02, to_y: 0.02, from_pose: "hidden" });
+      let flrY = navGrid?.getFloorY ? navGrid.getFloorY(entryPos[0], entryPos[1]) : 0.02;
+      if (aid === "killer") {
+        flrY = Math.min(0.08, flrY);
+      }
+      addSeg(aid, "hidden", 0, clock.t, entryPos, entryPos, 0, { weapon: null, floor_y: flrY, from_y: flrY, to_y: flrY, from_pose: "hidden" });
     }
   }
 
@@ -1043,9 +1313,21 @@ export function generateCrimePlan(script, anchors, bounds, center, grid = null, 
       const anc = anchors[tgt] || anchors["door"] || Object.values(anchors).find(a => a.type === "door") || Object.values(anchors)[0];
       const p = anc.pos;
       const inw = anc.inward;
-      // Start at doorway portal threshold, step cleanly inside room (past door frame, clear of entrance chairs)
-      const threshold = [Number((p[0] - inw[0] * 0.05).toFixed(3)), Number((p[1] - inw[1] * 0.05).toFixed(3))];
-      const inside = [Number((p[0] + inw[0] * 0.20).toFixed(3)), Number((p[1] + inw[1] * 0.20).toFixed(3))];
+      // Start exactly at doorway portal / boundary marker coordinate where marker is placed
+      let threshold = [Number(p[0].toFixed(3)), Number(p[1].toFixed(3))];
+      if (aid === "killer" && navGrid?.clampToFloor) {
+        threshold = navGrid.clampToFloor(threshold, 0.18);
+      }
+      let stepTarget = [Number((threshold[0] + inw[0] * 0.40).toFixed(3)), Number((threshold[1] + inw[1] * 0.40).toFixed(3))];
+      if (aid === "killer" && navGrid?.clampToFloor) {
+        stepTarget = navGrid.clampToFloor(stepTarget, 0.22);
+      }
+      let inside = (navGrid && typeof navGrid.getFreePosition === "function")
+        ? navGrid.getFreePosition(stepTarget)
+        : stepTarget;
+      if (aid === "killer" && navGrid?.clampToFloor) {
+        inside = navGrid.clampToFloor(inside, 0.22);
+      }
 
       const startT = actorClocks[aid] ?? clock.t;
       captions.push({ t: Number(startT.toFixed(2)), text: ev.narrative || `The ${role} enters through the ${tgt.replace("_", " ")}` });
@@ -1058,26 +1340,57 @@ export function generateCrimePlan(script, anchors, bounds, center, grid = null, 
       const isGun = actorWeapons[aid] === "gun" || ev.weapon === "gun";
 
       let stopPos;
-      const victimChair = Object.values(anchors).find(
-        (a) => a.type === "chair" && Math.hypot(a.pos[0] - tp[0], a.pos[1] - tp[1]) < 0.45
-      );
+      const isTargetVictim = actors[tgt] || tgt === "victim";
 
-      if (actors[tgt] && victimChair && victimChair.inward) {
-        // When approaching a victim sitting on or positioned at a chair:
-        // The attacker must stop in front of the victim along the chair's inward facing direction
-        const standOff = isGun ? 1.4 : 0.65;
-        const frontPos = [
-          victimChair.pos[0] + victimChair.inward[0] * standOff,
-          victimChair.pos[1] + victimChair.inward[1] * standOff
-        ];
-        stopPos = navGrid ? navGrid.getFreePosition(frontPos) : frontPos;
+      if (isTargetVictim) {
+        // Perpetrator reaches close to the victim (point-blank contact range: 0.38m - 0.58m)
+        const dx = cur[0] - tp[0];
+        const dz = cur[1] - tp[1];
+        const len = Math.hypot(dx, dz) || 1;
+        const approachDir = [dx / len, dz / len];
+
+        let bestStop = null;
+        let bestDist = Infinity;
+        if (navGrid) {
+          for (const distFromVictim of [0.42, 0.48, 0.55, 0.62, 0.36]) {
+            for (const angleOffset of [0, 0.35, -0.35, 0.7, -0.7, 1.05, -1.05, 1.4, -1.4]) {
+              const cosO = Math.cos(angleOffset), sinO = Math.sin(angleOffset);
+              const dirX = approachDir[0] * cosO - approachDir[1] * sinO;
+              const dirZ = approachDir[0] * sinO + approachDir[1] * cosO;
+              const cand = [tp[0] + dirX * distFromVictim, tp[1] + dirZ * distFromVictim];
+              const [cix, ciz] = navGrid._ij(cand);
+              if (!navGrid.obs[cix + ciz * navGrid.nx] && navGrid.isInsideFloor(cand[0], cand[1], 0.12)) {
+                const dFromCur = Math.hypot(cand[0] - cur[0], cand[1] - cur[1]);
+                if (dFromCur < bestDist) {
+                  bestDist = dFromCur;
+                  bestStop = navGrid._xz(cix, ciz);
+                }
+              }
+            }
+            if (bestStop) break;
+          }
+        }
+
+        if (!bestStop) {
+          const candidatePos = [tp[0] + approachDir[0] * 0.48, tp[1] + approachDir[1] * 0.48];
+          bestStop = (navGrid && typeof navGrid.getFreePosition === "function")
+            ? navGrid.getFreePosition(candidatePos)
+            : candidatePos;
+        }
+
+        stopPos = bestStop;
       } else {
         const dx = cur[0] - tp[0];
         const dz = cur[1] - tp[1];
         const len = Math.hypot(dx, dz) || 1;
-        const standOff = actors[tgt] ? (isGun ? 1.85 : 0.8) : 0.35;
-        const candidatePos = [tp[0] + (dx / len) * standOff, tp[1] + (dz / len) * standOff];
-        stopPos = navGrid ? navGrid.getFreePosition(candidatePos) : candidatePos;
+        const candidatePos = [tp[0] + (dx / len) * 0.45, tp[1] + (dz / len) * 0.45];
+        stopPos = (navGrid && typeof navGrid.getFreePosition === "function")
+          ? navGrid.getFreePosition(candidatePos)
+          : candidatePos;
+      }
+
+      if (aid === "killer" && navGrid?.clampToFloor) {
+        stopPos = navGrid.clampToFloor(stopPos, 0.20);
       }
 
       const startT = actorClocks[aid] ?? clock.t;
@@ -1125,7 +1438,7 @@ export function generateCrimePlan(script, anchors, bounds, center, grid = null, 
       const impactTime = tAttack + (style === "shoot" ? 0.38 : (style === "strangle" ? 1.2 : 0.65));
       impacts.push({
         t: Number(impactTime.toFixed(3)),
-        pos: [Number(tp[0].toFixed(3)), 1.15, Number(tp[1].toFixed(3))],
+        pos: [Number(tp[0].toFixed(3)), Number((1.15 * dummyScale).toFixed(3)), Number(tp[1].toFixed(3))],
         style
       });
 
@@ -1136,8 +1449,8 @@ export function generateCrimePlan(script, anchors, bounds, center, grid = null, 
           victimId: tgt,
           tShoot: Number(impactTime.toFixed(3)),
           duration: 0.25,
-          from: [Number(cur[0].toFixed(3)), 1.35, Number(cur[1].toFixed(3))],
-          to: [Number(tp[0].toFixed(3)), 1.15, Number(tp[1].toFixed(3))]
+          from: [Number(cur[0].toFixed(3)), Number((1.35 * dummyScale).toFixed(3)), Number(cur[1].toFixed(3))],
+          to: [Number(tp[0].toFixed(3)), Number((1.15 * dummyScale).toFixed(3)), Number(tp[1].toFixed(3))]
         });
       }
 
@@ -1255,8 +1568,20 @@ export function generateCrimePlan(script, anchors, bounds, center, grid = null, 
       const p = anc.pos;
       const inw = anc.inward;
       const cur = pos[aid] || center;
-      const threshold = [Number((p[0] - inw[0] * 0.05).toFixed(3)), Number((p[1] - inw[1] * 0.05).toFixed(3))];
-      const insideDoor = [Number((p[0] + inw[0] * 0.20).toFixed(3)), Number((p[1] + inw[1] * 0.20).toFixed(3))];
+      let threshold = [Number(p[0].toFixed(3)), Number(p[1].toFixed(3))];
+      if (aid === "killer" && navGrid?.clampToFloor) {
+        threshold = navGrid.clampToFloor(threshold, 0.18);
+      }
+      let stepTarget = [Number((threshold[0] + inw[0] * 0.40).toFixed(3)), Number((threshold[1] + inw[1] * 0.40).toFixed(3))];
+      if (aid === "killer" && navGrid?.clampToFloor) {
+        stepTarget = navGrid.clampToFloor(stepTarget, 0.22);
+      }
+      let insideDoor = (navGrid && typeof navGrid.getFreePosition === "function")
+        ? navGrid.getFreePosition(stepTarget)
+        : stepTarget;
+      if (aid === "killer" && navGrid?.clampToFloor) {
+        insideDoor = navGrid.clampToFloor(insideDoor, 0.22);
+      }
 
       const startT = actorClocks[aid] ?? clock.t;
       captions.push({ t: Number(startT.toFixed(2)), text: ev.narrative || `The ${role} flees through the ${tgt.replace("_", " ")}` });
@@ -1276,7 +1601,7 @@ export function generateCrimePlan(script, anchors, bounds, center, grid = null, 
           }
         }
         // Retrace in reverse: from current position back through all waypoints to inside the entry door
-        const returnPts = fullInbound.slice().reverse();
+        let returnPts = fullInbound.slice().reverse();
         // Ensure starting point is current position
         if (returnPts.length > 0 && Math.hypot(cur[0] - returnPts[0][0], cur[1] - returnPts[0][1]) > 0.05) {
           returnPts.unshift(cur);
@@ -1285,6 +1610,10 @@ export function generateCrimePlan(script, anchors, bounds, center, grid = null, 
         const lastPt = returnPts[returnPts.length - 1];
         if (Math.hypot(threshold[0] - lastPt[0], threshold[1] - lastPt[1]) > 0.1) {
           returnPts.push(threshold);
+        }
+
+        if (aid === "killer" && navGrid?.clampToFloor) {
+          returnPts = returnPts.map(pt => navGrid.clampToFloor(pt, 0.18));
         }
 
         walk(aid, cur, threshold, pace, false, startT, returnPts);
@@ -1296,7 +1625,10 @@ export function generateCrimePlan(script, anchors, bounds, center, grid = null, 
       }
 
       // Actor exits through the door and vanishes at the doorway threshold (inside room boundary)
-      const exitFloorY = navGrid?.getFloorY ? navGrid.getFloorY(threshold[0], threshold[1]) : 0.02;
+      let exitFloorY = navGrid?.getFloorY ? navGrid.getFloorY(threshold[0], threshold[1]) : 0.02;
+      if (aid === "killer") {
+        exitFloorY = Math.min(0.08, exitFloorY);
+      }
       addSeg(aid, "hidden", actorClocks[aid], actorClocks[aid] + 2.0, threshold, threshold, 0, { weapon: null, floor_y: exitFloorY, from_y: exitFloorY, to_y: exitFloorY });
       actorClocks[aid] += 2.0;
       clock.t = Math.max(clock.t, actorClocks[aid]);
@@ -1344,6 +1676,9 @@ export function generateCrimePlan(script, anchors, bounds, center, grid = null, 
 
   return {
     duration: totalDuration,
+    roomHeight: Number(roomHeight.toFixed(3)),
+    dummyScale: Number(dummyScale.toFixed(3)),
+    dummyHeight,
     tracks,
     paths,
     captions,

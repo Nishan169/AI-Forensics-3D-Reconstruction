@@ -15,9 +15,28 @@ def tool(name):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("images", nargs="?", default="input/images")
-    args = ap.parse_args()
+    ap.add_argument("--colmap", action="store_true", help="Run legacy COLMAP + OpenMVS pipeline instead of DUSt3R")
+    args, unknown = ap.parse_known_args()
 
     root = Path(__file__).resolve().parent
+    # Default to DUSt3R neural reconstruction (primary engine)
+    dust3r_script = root / "reconstruct_dust3r.py"
+    if dust3r_script.exists():
+        try:
+            import reconstruct_dust3r
+            return reconstruct_dust3r.main()
+        except Exception as e:
+            print(f"[DUSt3R Launcher] Direct import notice ({e}), launching as subprocess...")
+            cmd = [sys.executable, str(dust3r_script)] + sys.argv[1:]
+            return subprocess.run(cmd, check=True).returncode
+
+    # =========================================================================
+    # [LEGACY / UNVISITED - Shifted from COLMAP + OpenMVS to DUSt3R]
+    # The block below was the original photogrammetry SfM pipeline.
+    # It required local binaries: colmap, InterfaceCOLMAP, DensifyPointCloud,
+    # ReconstructMesh, and TextureMesh. It is preserved below commented out for reference.
+    # =========================================================================
+    """
     image_dir = Path(args.images).expanduser()
     if not image_dir.is_absolute():
         image_dir = root / image_dir
@@ -51,7 +70,9 @@ def main():
     run(["colmap", "feature_extractor", "--database_path", str(database),
          "--image_path", str(image_dir),
          "--ImageReader.camera_model", "SIMPLE_RADIAL",
-         "--ImageReader.single_camera", "1"])
+         "--ImageReader.single_camera", "1",
+         "--SiftExtraction.max_num_features", "8192",
+         "--SiftExtraction.estimate_affine_shape", "1"])
 
     run(["colmap", "exhaustive_matcher", "--database_path", str(database),
          "--FeatureMatching.guided_matching", "1",
@@ -101,12 +122,13 @@ def main():
     mesh_scene = mvs / "scene_mesh.mvs"
     mesh_ply = mvs / "scene_mesh.ply"
     run(["ReconstructMesh", "-w", str(mvs), "-i", str(dense_scene), "-o", str(mesh_scene),
-         "-f", "1",
+         "-f", "0",
          "--constant-weight", "1",
-         "--close-holes", "500",
+         "--close-holes", "30",
          "--smooth", "2",
-         "--remove-spurious", "15",
-         "-d", "2.5",
+         "--remove-spikes", "1",
+         "--remove-spurious", "25",
+         "-d", "2.0",
          "--thickness-factor", "1.0"])
 
     if not mesh_ply.exists() or mesh_ply.stat().st_size < 300:
@@ -122,7 +144,10 @@ def main():
     glb = mvs / "scene_textured.glb"
     run(["TextureMesh", "-w", str(mvs), "-i", str(dense_scene), "-m", str(mesh_ply),
          "-o", str(glb), "--export-type", "glb",
-         "--close-holes", "100",
+         "--close-holes", "30",
+         "--global-seam-leveling", "1",
+         "--local-seam-leveling", "1",
+         "--cost-smoothness-ratio", "0.2",
          "--empty-color", "14144202",
          "--patch-packing-heuristic", "3"])
 
@@ -130,34 +155,32 @@ def main():
     if not glb.exists():
         raise SystemExit(f"GLB missing: {glb}")
 
-    # Inpaint all void/unobserved spaces across all texture atlases using nearest-neighbor color propagation
-    tex_candidates = sorted(list(mvs.glob("scene_textured*.png")))
-    dest_glb = models / "scene_textured.glb"
+    dest_glb    = models / "scene_textured.glb"
     dist_models = root / "frontend" / "dist" / "models"
 
-    for tex_path in tex_candidates:
+    # ── Enhance the raw OpenMVS GLB FIRST (cleanup, orientation, scale)
+    # This runs enhance_mesh on the openmvs output before deploying to frontend,
+    # ensuring the brownish Delaunay exterior shell is removed cleanly.
+    enhance_script = root / "scripts" / "enhance_mesh.py"
+    import subprocess
+    uv_path = shutil.which("uv")
+    if enhance_script.exists():
         try:
-            print(f"[texture] Inpainting void spaces in {tex_path.name} from nearest observed neighbors...", flush=True)
-            from PIL import Image
-            import numpy as np
-            from scipy.ndimage import distance_transform_edt
-
-            img = Image.open(tex_path).convert("RGB")
-            arr = np.array(img)
-            # Detect OpenMVS void/unobserved orange fill [255, 127..145, 38..45]
-            void_mask = (arr[:, :, 0] > 195) & (arr[:, :, 1] > 75) & (arr[:, :, 1] < 175) & (arr[:, :, 2] < 95)
-            n_void = int(np.sum(void_mask))
-            if n_void > 0:
-                print(f"[texture] {tex_path.name}: Inpainting {n_void:,} void pixels ({n_void/void_mask.size*100:.1f}%)...", flush=True)
-                nearest_idx = distance_transform_edt(void_mask, return_distances=False, return_indices=True)
-                arr[void_mask] = arr[nearest_idx[0][void_mask], nearest_idx[1][void_mask]]
-                out_img = Image.fromarray(arr)
-                out_img.save(str(tex_path), quality=95)
-                print(f"[texture] {tex_path.name}: Successfully inpainted from nearest observed neighbors!", flush=True)
+            print("[enhance_mesh] Cleaning photogrammetric mesh (removing exterior shell, "
+                  "texture inpainting, orientation, scale)…", flush=True)
+            enhance_cmd = (
+                [uv_path, "run", "--with", "scipy", "--with", "numpy",
+                 "--with", "pillow", "--with", "trimesh",
+                 "python3", str(enhance_script), str(glb)]
+                if os.path.exists(uv_path)
+                else [sys.executable, str(enhance_script), str(glb)]
+            )
+            subprocess.run(enhance_cmd, cwd=str(root), check=False)
         except Exception as e:
-            print(f"[texture] Inpainting notice for {tex_path.name}: {e}", flush=True)
+            print(f"[enhance_mesh] Notice: {e}", flush=True)
 
-    # Deploy GLB and textures to frontend public and dist models directories
+    # ── Deploy enhanced GLB + textures to frontend
+    tex_candidates = sorted(list(mvs.glob("scene_textured*.png")))
     shutil.copy2(glb, dest_glb)
     for tex_path in tex_candidates:
         shutil.copy2(tex_path, models / tex_path.name)
@@ -165,19 +188,82 @@ def main():
             shutil.copy2(tex_path, dist_models / tex_path.name)
     if dist_models.exists():
         shutil.copy2(dest_glb, dist_models / "scene_textured.glb")
-    print(f"[deploy] Continuous textured mesh and {len(tex_candidates)} inpainted texture(s) deployed to frontend.", flush=True)
+    print(f"[deploy] Enhanced textured mesh deployed to frontend "
+          f"({len(tex_candidates)} texture file(s)).", flush=True)
 
-    # Automatically enhance mesh geometry, purge floating shards, and neutralize unobserved texture artifacts
-    enhance_script = root / "scripts" / "enhance_mesh.py"
-    if enhance_script.exists():
-        try:
-            print("[enhance_mesh] Enhancing room geometry, pruning floating shards, and cleaning textures...", flush=True)
-            import subprocess
-            uv_path = "/Users/mohammadmojijansari/.local/bin/uv"
-            enhance_cmd = [uv_path, "run", "--with", "scipy", "--with", "numpy", "--with", "pillow", "--with", "trimesh", "python3", str(enhance_script), str(dest_glb)] if os.path.exists(uv_path) else [sys.executable, str(enhance_script), str(dest_glb)]
-            subprocess.run(enhance_cmd, cwd=str(root), check=False)
-        except Exception as e:
-            print(f"[enhance_mesh] Notice: {e}", flush=True)
+    # Canonical Axis-Alignment and export room_bounds.json
+    try:
+        import trimesh, json, numpy as np
+        scene_mesh = trimesh.load(str(dest_glb), process=False)
+        bounds_json = out / "room_bounds.json"
+        
+        # 1. Convert to trimesh object
+        if isinstance(scene_mesh, trimesh.Scene):
+            mesh = scene_mesh.dump(concatenate=True)
+            if isinstance(mesh, list):
+                mesh = mesh[0]
+        else:
+            mesh = scene_mesh
+
+        pts = mesh.vertices
+
+        # 1. ROBUST CENTERING (Ignores floaters completely)
+        med_x = np.median(pts[:, 0])
+        med_z = np.median(pts[:, 2])
+        floor_y = np.percentile(pts[:, 1], 5)
+        mesh.apply_translation([-med_x, -floor_y, -med_z])
+
+        # 2. YAW ROTATION (Align walls to grid)
+        pts = mesh.vertices
+        distances = np.linalg.norm(pts[:, [0,2]], axis=1)
+        core_pts = pts[distances < np.percentile(distances, 80)]
+
+        if len(core_pts) > 10:
+            cov = np.cov(core_pts[:, [0, 2]].T)
+            evals, evecs = np.linalg.eig(cov)
+            primary = evecs[:, np.argmax(evals)]
+            angle = np.arctan2(primary[1], primary[0])
+            rot_matrix = trimesh.transformations.rotation_matrix(-angle, [0, 1, 0])
+            mesh.apply_transform(rot_matrix)
+
+        # 3. UNIFORM SCALING (Fit to the fixed stage)
+        pts = mesh.vertices
+        min_x, max_x = np.percentile(pts[:, 0], [5, 95])
+        min_z, max_z = np.percentile(pts[:, 2], [5, 95])
+
+        max_dim = max(max_x - min_x, max_z - min_z)
+        TARGET_SIZE = 10.0
+        scale_factor = TARGET_SIZE / max_dim if max_dim > 0 else 1.0
+
+        scale_matrix = trimesh.transformations.scale_matrix(scale_factor)
+        mesh.apply_transform(scale_matrix)
+
+        mesh.export(str(dest_glb))
+
+        # 4. THE FIXED STAGE (Hardcoded Markers)
+        F = 5.5
+
+        bounds_data = {
+            "NW": [-F, 0.0, -F],
+            "NE": [ F, 0.0, -F],
+            "SW": [-F, 0.0,  F],
+            "SE": [ F, 0.0,  F],
+            "N":  [ 0.0, 0.0, -F],
+            "S":  [ 0.0, 0.0,  F],
+            "E":  [ F, 0.0,   0.0],
+            "W":  [-F, 0.0,   0.0]
+        }
+
+        with open(bounds_json, "w", encoding="utf-8") as f:
+            json.dump(bounds_data, f, indent=4)
+        shutil.copy2(dest_glb, models / "scene_textured.glb")
+        shutil.copy2(bounds_json, models / "room_bounds.json")
+        if dist_models.exists():
+            shutil.copy2(dest_glb, dist_models / "scene_textured.glb")
+            shutil.copy2(bounds_json, dist_models / "room_bounds.json")
+        print(f"[RoomBounds] Saved canonical axis-aligned bounds to: {bounds_json}", flush=True)
+    except Exception as be:
+        print(f"[RoomBounds] Notice: {be}", flush=True)
 
     # Automatically compute true compass northOffset from reference camera pose
     calib_script = root / "scripts" / "calibrate_direction.py"
@@ -186,7 +272,7 @@ def main():
         try:
             print("[direction] Calibrating compass northOffset from reference camera pose...", flush=True)
             import subprocess
-            uv_path = "/Users/mohammadmojijansari/.local/bin/uv"
+            uv_path = shutil.which("uv")
             calib_cmd = [uv_path, "run", "--with", "pycolmap", "python3", str(calib_script)] if os.path.exists(uv_path) else [sys.executable, str(calib_script)]
             subprocess.run(calib_cmd, cwd=str(root), check=False)
             
@@ -200,6 +286,8 @@ def main():
     print("\nDONE.")
     print("Model:", dest_glb)
     print("Run the viewer with: cd frontend && npm run dev")
+    """
+    return 0
 
 if __name__ == "__main__":
     main()

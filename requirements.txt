@@ -1,6 +1,42 @@
-numpy
-pillow
-trimesh
-scipy
-networkx
-pycolmap
+# Forensic Spatial Analyzer - Python Backend Requirements
+# ========================================================
+# Cross-Platform PyTorch, DUSt3R, and Open3D 3D Reconstruction Pipeline
+#
+# PLATFORM-SPECIFIC PYTORCH INSTALLATION INSTRUCTIONS:
+# ----------------------------------------------------
+# 1. macOS (Apple Silicon M1/M2/M3/M4 / MPS):
+#    pip install torch torchvision
+#
+# 2. Linux / Windows with NVIDIA GPU (CUDA 12.1):
+#    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+#
+# 3. Linux / Windows (CPU-only fallback):
+#    pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+#
+# 4. DUSt3R Source (automatic if running reconstruct_dust3r.py, or manual):
+#    git clone --recursive https://github.com/naver/dust3r.git third_party/dust3r
+# ----------------------------------------------------
+
+# PyTorch Deep Learning Framework
+torch>=2.1.0
+torchvision>=0.16.0
+
+# 3D Geometry Processing & Poisson Surface Reconstruction
+open3d>=0.18.0
+trimesh>=4.0.0
+scipy>=1.11.0
+numpy>=1.24.0,<2.0.0
+
+# DUSt3R & CroCo Dependencies
+roma>=1.4.0
+timm>=0.9.12
+einops>=0.7.0
+huggingface-hub>=0.20.0
+opencv-python>=4.8.0
+
+# Image & Graph Processing
+pillow>=10.0.0
+networkx>=3.0
+
+# Legacy compatibility (optional)
+pycolmap>=0.6.0

@@ -1,0 +1,596 @@
+[
+  {
+    "id": "table_center",
+    "type": "table",
+    "label": "Central Living Room Table",
+    "icon": "\ud83e\udeb5",
+    "pos": [
+      -0.49,
+      -0.36
+    ],
+    "y": -0.02,
+    "inward": [
+      0.0,
+      1.0
+    ],
+    "size": [
+      1.4,
+      0.9
+    ],
+    "verified": true,
+    "confidence": 0.96,
+    "sector": "Center",
+    "sectorLabel": "Center",
+    "bearing": 0.0,
+    "distance": 0.85,
+    "isCenter": true,
+    "displayBadge": "\ud83e\udeb5 Central Table [Center]"
+  },
+  {
+    "id": "chair_center",
+    "type": "chair",
+    "label": "Victim Chair",
+    "icon": "\ud83e\ude91",
+    "pos": [
+      -1.15,
+      0.025
+    ],
+    "y": 0.107,
+    "inward": [
+      0.0,
+      -1.0
+    ],
+    "size": [
+      0.65,
+      0.65
+    ],
+    "verified": true,
+    "confidence": 0.98,
+    "sector": "Center",
+    "sectorLabel": "Center",
+    "bearing": 0.0,
+    "distance": 0.0,
+    "isCenter": true,
+    "displayBadge": "\ud83e\ude91 Victim Chair [Center]"
+  },
+  {
+    "id": "chair_n",
+    "type": "chair",
+    "label": "North Chair",
+    "icon": "\ud83e\ude91",
+    "pos": [
+      -1.15,
+      1.005
+    ],
+    "y": 0.249,
+    "inward": [
+      0.0,
+      -1.0
+    ],
+    "size": [
+      0.65,
+      0.65
+    ],
+    "verified": true,
+    "confidence": 0.95,
+    "sector": "N",
+    "sectorLabel": "North",
+    "bearing": 180.0,
+    "distance": 0.98,
+    "isCenter": false,
+    "displayBadge": "\ud83e\ude91 North Chair [N]"
+  },
+  {
+    "id": "door_n",
+    "type": "door",
+    "label": "North Door",
+    "icon": "\ud83d\udeaa",
+    "pos": [
+      -1.15,
+      1.425
+    ],
+    "y": 0.322,
+    "inward": [
+      0.0,
+      -1.0
+    ],
+    "size": [
+      1.1,
+      2.1
+    ],
+    "verified": true,
+    "confidence": 0.95,
+    "sector": "N",
+    "sectorLabel": "North",
+    "bearing": 180.0,
+    "distance": 1.4,
+    "isCenter": false,
+    "displayBadge": "\ud83d\udeaa North Door [N]"
+  },
+  {
+    "id": "window_n",
+    "type": "window",
+    "label": "North Window",
+    "icon": "\ud83e\ude9f",
+    "pos": [
+      -1.15,
+      1.425
+    ],
+    "y": 0.322,
+    "inward": [
+      0.0,
+      -1.0
+    ],
+    "size": [
+      1.6,
+      2.2
+    ],
+    "verified": true,
+    "confidence": 0.92,
+    "sector": "N",
+    "sectorLabel": "North",
+    "bearing": 180.0,
+    "distance": 1.4,
+    "isCenter": false,
+    "displayBadge": "\ud83e\ude9f North Window [N]"
+  },
+  {
+    "id": "chair_ne",
+    "type": "chair",
+    "label": "North-East Chair",
+    "icon": "\ud83e\ude91",
+    "pos": [
+      -2.742,
+      1.005
+    ],
+    "y": 0.336,
+    "inward": [
+      0.852,
+      -0.524
+    ],
+    "size": [
+      0.65,
+      0.65
+    ],
+    "verified": true,
+    "confidence": 0.95,
+    "sector": "NE",
+    "sectorLabel": "North-East",
+    "bearing": 238.4,
+    "distance": 1.87,
+    "isCenter": false,
+    "displayBadge": "\ud83e\ude91 North-East Chair [NE]"
+  },
+  {
+    "id": "door_ne",
+    "type": "door",
+    "label": "North-East Door",
+    "icon": "\ud83d\udeaa",
+    "pos": [
+      -3.425,
+      1.425
+    ],
+    "y": 0.358,
+    "inward": [
+      0.852,
+      -0.524
+    ],
+    "size": [
+      1.1,
+      2.1
+    ],
+    "verified": true,
+    "confidence": 0.95,
+    "sector": "NE",
+    "sectorLabel": "North-East",
+    "bearing": 238.4,
+    "distance": 2.67,
+    "isCenter": false,
+    "displayBadge": "\ud83d\udeaa North-East Door [NE]"
+  },
+  {
+    "id": "chair_e",
+    "type": "chair",
+    "label": "East Chair",
+    "icon": "\ud83e\ude91",
+    "pos": [
+      -2.742,
+      0.025
+    ],
+    "y": 0.169,
+    "inward": [
+      1.0,
+      0.0
+    ],
+    "size": [
+      0.65,
+      0.65
+    ],
+    "verified": true,
+    "confidence": 0.95,
+    "sector": "E",
+    "sectorLabel": "East",
+    "bearing": 270.0,
+    "distance": 1.59,
+    "isCenter": false,
+    "displayBadge": "\ud83e\ude91 East Chair [E]"
+  },
+  {
+    "id": "door_e",
+    "type": "door",
+    "label": "East Door",
+    "icon": "\ud83d\udeaa",
+    "pos": [
+      -3.425,
+      0.025
+    ],
+    "y": 0.21,
+    "inward": [
+      1.0,
+      0.0
+    ],
+    "size": [
+      1.1,
+      2.1
+    ],
+    "verified": true,
+    "confidence": 0.95,
+    "sector": "E",
+    "sectorLabel": "East",
+    "bearing": 270.0,
+    "distance": 2.27,
+    "isCenter": false,
+    "displayBadge": "\ud83d\udeaa East Door [E]"
+  },
+  {
+    "id": "window_e",
+    "type": "window",
+    "label": "East Window",
+    "icon": "\ud83e\ude9f",
+    "pos": [
+      -3.425,
+      0.025
+    ],
+    "y": 0.21,
+    "inward": [
+      1.0,
+      0.0
+    ],
+    "size": [
+      1.6,
+      2.2
+    ],
+    "verified": true,
+    "confidence": 0.92,
+    "sector": "E",
+    "sectorLabel": "East",
+    "bearing": 270.0,
+    "distance": 2.27,
+    "isCenter": false,
+    "displayBadge": "\ud83e\ude9f East Window [E]"
+  },
+  {
+    "id": "chair_se",
+    "type": "chair",
+    "label": "South-East Chair",
+    "icon": "\ud83e\ude91",
+    "pos": [
+      -2.742,
+      -0.955
+    ],
+    "y": 0.005,
+    "inward": [
+      0.852,
+      0.524
+    ],
+    "size": [
+      0.65,
+      0.65
+    ],
+    "verified": true,
+    "confidence": 0.95,
+    "sector": "SE",
+    "sectorLabel": "South-East",
+    "bearing": 301.6,
+    "distance": 1.87,
+    "isCenter": false,
+    "displayBadge": "\ud83e\ude91 South-East Chair [SE]"
+  },
+  {
+    "id": "door_se",
+    "type": "door",
+    "label": "South-East Door",
+    "icon": "\ud83d\udeaa",
+    "pos": [
+      -3.425,
+      -1.375
+    ],
+    "y": 0.018,
+    "inward": [
+      0.852,
+      0.524
+    ],
+    "size": [
+      1.1,
+      2.1
+    ],
+    "verified": true,
+    "confidence": 0.95,
+    "sector": "SE",
+    "sectorLabel": "South-East",
+    "bearing": 301.6,
+    "distance": 2.67,
+    "isCenter": false,
+    "displayBadge": "\ud83d\udeaa South-East Door [SE]"
+  },
+  {
+    "id": "chair_s",
+    "type": "chair",
+    "label": "South Chair",
+    "icon": "\ud83e\ude91",
+    "pos": [
+      -1.15,
+      -0.955
+    ],
+    "y": -0.011,
+    "inward": [
+      0.0,
+      1.0
+    ],
+    "size": [
+      0.65,
+      0.65
+    ],
+    "verified": true,
+    "confidence": 0.95,
+    "sector": "S",
+    "sectorLabel": "South",
+    "bearing": 0.0,
+    "distance": 0.98,
+    "isCenter": false,
+    "displayBadge": "\ud83e\ude91 South Chair [S]"
+  },
+  {
+    "id": "door_s",
+    "type": "door",
+    "label": "South Door",
+    "icon": "\ud83d\udeaa",
+    "pos": [
+      -1.15,
+      -1.375
+    ],
+    "y": -0.055,
+    "inward": [
+      0.0,
+      1.0
+    ],
+    "size": [
+      1.1,
+      2.1
+    ],
+    "verified": true,
+    "confidence": 0.95,
+    "sector": "S",
+    "sectorLabel": "South",
+    "bearing": 0.0,
+    "distance": 1.4,
+    "isCenter": false,
+    "displayBadge": "\ud83d\udeaa South Door [S]"
+  },
+  {
+    "id": "window_s",
+    "type": "window",
+    "label": "South Window",
+    "icon": "\ud83e\ude9f",
+    "pos": [
+      -1.15,
+      -1.375
+    ],
+    "y": -0.055,
+    "inward": [
+      0.0,
+      1.0
+    ],
+    "size": [
+      1.6,
+      2.2
+    ],
+    "verified": true,
+    "confidence": 0.92,
+    "sector": "S",
+    "sectorLabel": "South",
+    "bearing": 0.0,
+    "distance": 1.4,
+    "isCenter": false,
+    "displayBadge": "\ud83e\ude9f South Window [S]"
+  },
+  {
+    "id": "chair_sw",
+    "type": "chair",
+    "label": "South-West Chair",
+    "icon": "\ud83e\ude91",
+    "pos": [
+      0.442,
+      -0.955
+    ],
+    "y": -0.069,
+    "inward": [
+      -0.852,
+      0.524
+    ],
+    "size": [
+      0.65,
+      0.65
+    ],
+    "verified": true,
+    "confidence": 0.95,
+    "sector": "SW",
+    "sectorLabel": "South-West",
+    "bearing": 58.4,
+    "distance": 1.87,
+    "isCenter": false,
+    "displayBadge": "\ud83e\ude91 South-West Chair [SW]"
+  },
+  {
+    "id": "door_sw",
+    "type": "door",
+    "label": "South-West Door",
+    "icon": "\ud83d\udeaa",
+    "pos": [
+      1.125,
+      -1.375
+    ],
+    "y": -0.133,
+    "inward": [
+      -0.852,
+      0.524
+    ],
+    "size": [
+      1.1,
+      2.1
+    ],
+    "verified": true,
+    "confidence": 0.95,
+    "sector": "SW",
+    "sectorLabel": "South-West",
+    "bearing": 58.4,
+    "distance": 2.67,
+    "isCenter": false,
+    "displayBadge": "\ud83d\udeaa South-West Door [SW]"
+  },
+  {
+    "id": "chair_w",
+    "type": "chair",
+    "label": "West Chair",
+    "icon": "\ud83e\ude91",
+    "pos": [
+      0.442,
+      0.025
+    ],
+    "y": 0.006,
+    "inward": [
+      -1.0,
+      0.0
+    ],
+    "size": [
+      0.65,
+      0.65
+    ],
+    "verified": true,
+    "confidence": 0.95,
+    "sector": "W",
+    "sectorLabel": "West",
+    "bearing": 90.0,
+    "distance": 1.59,
+    "isCenter": false,
+    "displayBadge": "\ud83e\ude91 West Chair [W]"
+  },
+  {
+    "id": "door_w",
+    "type": "door",
+    "label": "West Door",
+    "icon": "\ud83d\udeaa",
+    "pos": [
+      1.125,
+      0.025
+    ],
+    "y": 0.03,
+    "inward": [
+      -1.0,
+      0.0
+    ],
+    "size": [
+      1.1,
+      2.1
+    ],
+    "verified": true,
+    "confidence": 0.95,
+    "sector": "W",
+    "sectorLabel": "West",
+    "bearing": 90.0,
+    "distance": 2.27,
+    "isCenter": false,
+    "displayBadge": "\ud83d\udeaa West Door [W]"
+  },
+  {
+    "id": "window_w",
+    "type": "window",
+    "label": "West Window",
+    "icon": "\ud83e\ude9f",
+    "pos": [
+      1.125,
+      0.025
+    ],
+    "y": 0.03,
+    "inward": [
+      -1.0,
+      0.0
+    ],
+    "size": [
+      1.6,
+      2.2
+    ],
+    "verified": true,
+    "confidence": 0.92,
+    "sector": "W",
+    "sectorLabel": "West",
+    "bearing": 90.0,
+    "distance": 2.27,
+    "isCenter": false,
+    "displayBadge": "\ud83e\ude9f West Window [W]"
+  },
+  {
+    "id": "chair_nw",
+    "type": "chair",
+    "label": "North-West Chair",
+    "icon": "\ud83e\ude91",
+    "pos": [
+      0.442,
+      1.005
+    ],
+    "y": 0.188,
+    "inward": [
+      -0.852,
+      -0.524
+    ],
+    "size": [
+      0.65,
+      0.65
+    ],
+    "verified": true,
+    "confidence": 0.95,
+    "sector": "NW",
+    "sectorLabel": "North-West",
+    "bearing": 121.6,
+    "distance": 1.87,
+    "isCenter": false,
+    "displayBadge": "\ud83e\ude91 North-West Chair [NW]"
+  },
+  {
+    "id": "door_nw",
+    "type": "door",
+    "label": "North-West Door",
+    "icon": "\ud83d\udeaa",
+    "pos": [
+      1.125,
+      1.425
+    ],
+    "y": 0.282,
+    "inward": [
+      -0.852,
+      -0.524
+    ],
+    "size": [
+      1.1,
+      2.1
+    ],
+    "verified": true,
+    "confidence": 0.95,
+    "sector": "NW",
+    "sectorLabel": "North-West",
+    "bearing": 121.6,
+    "distance": 2.67,
+    "isCenter": false,
+    "displayBadge": "\ud83d\udeaa North-West Door [NW]"
+  }
+]

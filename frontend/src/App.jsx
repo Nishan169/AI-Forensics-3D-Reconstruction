@@ -32,66 +32,141 @@ function SimulationClock({ isPlaying, speed, onTick }) {
   return null;
 }
 
-// ── Forensic Spatial Room (shown when no photogrammetry mesh loaded) ──
-function ForensicSpatialRoom({ center = [0, 0, 0], radius = 4, northOffset = 0, roomSize = null }) {
-  const halfX = roomSize ? roomSize[0] * 0.48 : radius;
-  const halfZ = roomSize ? roomSize[2] * 0.48 : radius;
+// ── Extract 4 true physical corners & 4 wall midpoints via 2D Oriented Bounding Box ──
+function computeRoomBoundaryMarkers(vertices, northOffset = 0) {
+  if (!vertices || vertices.length < 10) return null;
 
-  const cardinals = [
-    { label: "N", relPos: [0, -halfZ], color: "#ff6b6b", isNorth: true },
-    { label: "S", relPos: [0, halfZ], color: "#94a3b8" },
-    { label: "E", relPos: [halfX, 0], color: "#94a3b8" },
-    { label: "W", relPos: [-halfX, 0], color: "#94a3b8" },
-    { label: "NE", relPos: [halfX, -halfZ], color: "#64748b" },
-    { label: "NW", relPos: [-halfX, -halfZ], color: "#64748b" },
-    { label: "SE", relPos: [halfX, halfZ], color: "#64748b" },
-    { label: "SW", relPos: [-halfX, halfZ], color: "#64748b" },
+  // 1. Median center & floor Y
+  const xs = vertices.map((v) => v.x).sort((a, b) => a - b);
+  const zs = vertices.map((v) => v.z).sort((a, b) => a - b);
+  const ys = vertices.map((v) => v.y).sort((a, b) => a - b);
+
+  const N = xs.length;
+  const medX = xs[Math.floor(N * 0.5)];
+  const medZ = zs[Math.floor(N * 0.5)];
+  const floorY = ys[Math.floor(N * 0.025)] || 0;
+
+  // 2. Filter outliers beyond 98.5% radius from median to isolate main room core
+  const pts = [];
+  const dists = [];
+  for (let i = 0; i < N; i++) {
+    const dx = vertices[i].x - medX;
+    const dz = vertices[i].z - medZ;
+    const d = Math.hypot(dx, dz);
+    pts.push({ dx, dz, d });
+    dists.push(d);
+  }
+  dists.sort((a, b) => a - b);
+  const maxR = dists[Math.floor(N * 0.985)] || 10;
+  const inliers = pts.filter((p) => p.d <= maxR);
+  if (inliers.length < 10) return null;
+
+  // 3. 2D Covariance matrix on XZ plane to find room yaw orientation
+  let covXX = 0, covZZ = 0, covXZ = 0;
+  for (const p of inliers) {
+    covXX += p.dx * p.dx;
+    covZZ += p.dz * p.dz;
+    covXZ += p.dx * p.dz;
+  }
+  covXX /= inliers.length;
+  covZZ /= inliers.length;
+  covXZ /= inliers.length;
+
+  // Principal orientation angle (yaw) of the rectangular room
+  const theta = 0.5 * Math.atan2(2.0 * covXZ, covXX - covZZ);
+  const cosT = Math.cos(theta);
+  const sinT = Math.sin(theta);
+
+  // Project points into the room's local aligned coordinate frame (u, v)
+  const us = [];
+  const vs = [];
+  for (const p of inliers) {
+    us.push(p.dx * cosT + p.dz * sinT);
+    vs.push(-p.dx * sinT + p.dz * cosT);
+  }
+  us.sort((a, b) => a - b);
+  vs.sort((a, b) => a - b);
+
+  const M = us.length;
+  // 1.5% and 98.5% percentiles tightly snap to the actual walls (ignoring floaters)
+  const uMin = us[Math.floor(M * 0.015)];
+  const uMax = us[Math.floor(M * 0.985)];
+  const vMin = vs[Math.floor(M * 0.015)];
+  const vMax = vs[Math.floor(M * 0.985)];
+
+  const halfU = (uMax - uMin) / 2.0;
+  const halfV = (vMax - vMin) / 2.0;
+  const centerU = (uMax + uMin) / 2.0;
+  const centerV = (vMax + vMin) / 2.0;
+
+  // 4 corners in room local frame
+  const cornersUV = [
+    [centerU - halfU, centerV - halfV],
+    [centerU + halfU, centerV - halfV],
+    [centerU + halfU, centerV + halfV],
+    [centerU - halfU, centerV + halfV],
   ];
 
-  const rotRad = (northOffset * Math.PI) / 180;
-  const cosR = Math.cos(rotRad);
-  const sinR = Math.sin(rotRad);
+  // Transform 4 corners back to Three.js world space (X, Z)
+  const box = cornersUV.map(([cu, cv]) => [
+    medX + (cu * cosT - cv * sinT),
+    medZ + (cu * sinT + cv * cosT),
+  ]);
 
-  return (
-    <group position={[center[0], 0, center[2]]}>
-      {/* Rectangular room boundary floor outline */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.005, 0]}>
-        <planeGeometry args={[halfX * 2, halfZ * 2]} />
-        <meshBasicMaterial color="#3b6bff" wireframe opacity={0.25} transparent />
-      </mesh>
+  // Center of the 4 corners
+  const cx = box.reduce((sum, p) => sum + p[0], 0) / 4.0;
+  const cz = box.reduce((sum, p) => sum + p[1], 0) / 4.0;
 
-      {/* Cardinal & corner perimeter markers */}
-      {cardinals.map(({ label, relPos, color }) => {
-        const px = relPos[0] * cosR - relPos[1] * sinR;
-        const pz = relPos[0] * sinR + relPos[1] * cosR;
-        return (
-          <group key={label} position={[px, 0.02, pz]}>
-            <mesh rotation={[-Math.PI / 2, 0, 0]}>
-              <ringGeometry args={[0.15, 0.22, 24]} />
-              <meshBasicMaterial color={color} side={THREE.DoubleSide} />
-            </mesh>
-            <Html position={[0, 0.35, 0]} center distanceFactor={14}>
-              <div
-                style={{
-                  padding: "2px 8px",
-                  borderRadius: "12px",
-                  background: label === "N" ? "rgba(239, 68, 68, 0.25)" : "rgba(15, 23, 42, 0.85)",
-                  border: `1px solid ${color}`,
-                  color: color,
-                  fontSize: "11px",
-                  fontWeight: "700",
-                  pointerEvents: "none",
-                  userSelect: "none",
-                }}
-              >
-                {label}
-              </div>
-            </Html>
-          </group>
-        );
-      })}
-    </group>
-  );
+  // Unit vectors for North and East derived from northOffset
+  const rad = (northOffset * Math.PI) / 180.0;
+  const uNx = Math.sin(rad);
+  const uNz = -Math.cos(rad);
+  const uEx = Math.cos(rad);
+  const uEz = Math.sin(rad);
+
+  // Bearing of each corner relative to North: 0° = North, 90° = East, 180° = South, 270° = West
+  const cornersWithAngle = box.map((pt) => {
+    const vx = pt[0] - cx;
+    const vz = pt[1] - cz;
+    const projN = vx * uNx + vz * uNz;
+    const projE = vx * uEx + vz * uEz;
+    let angle = Math.atan2(projE, projN) * (180.0 / Math.PI);
+    if (angle < 0) angle += 360.0;
+    return { pt, angle };
+  });
+
+  // Sort corners cyclically starting clockwise from North (0° → 360°)
+  cornersWithAngle.sort((a, b) => a.angle - b.angle);
+
+  // In clockwise cyclical order around any rectangle:
+  // 1st corner clockwise from North is NE
+  // 2nd corner is SE
+  // 3rd corner is SW
+  // 4th corner is NW
+  const cNE = cornersWithAngle[0].pt;
+  const cSE = cornersWithAngle[1].pt;
+  const cSW = cornersWithAngle[2].pt;
+  const cNW = cornersWithAngle[3].pt;
+
+  const yCoord = floorY + 0.35;
+
+  // Helper for midpoint of wall between two corners
+  const mid = (p1, p2) => [
+    (p1[0] + p2[0]) / 2.0,
+    yCoord,
+    (p1[1] + p2[1]) / 2.0,
+  ];
+
+  return {
+    NW: [cNW[0], yCoord, cNW[1]],
+    NE: [cNE[0], yCoord, cNE[1]],
+    SE: [cSE[0], yCoord, cSE[1]],
+    SW: [cSW[0], yCoord, cSW[1]],
+    N: mid(cNW, cNE),
+    E: mid(cNE, cSE),
+    S: mid(cSE, cSW),
+    W: mid(cSW, cNW),
+  };
 }
 
 // ── 3D Model + auto-fit camera to bounding box ────────────────────────
@@ -100,6 +175,7 @@ function ModelWithCamera({
   controlsRef,
   onModelInfo,
   northOffset = 0,
+  serverBoundaryMarkers = null,
 }) {
   const { scene } = useGLTF(url);
   const { camera } = useThree();
@@ -107,46 +183,40 @@ function ModelWithCamera({
   const [modelTransform, setModelTransform] = useState(null);
   const [boundsInfo, setBoundsInfo] = useState(null);
 
+  // ── Override GLTF Materials to Unlit (MeshBasicMaterial) ──────────────
+  useEffect(() => {
+    if (scene) {
+      scene.traverse((child) => {
+        if (child.isMesh) {
+          child.frustumCulled = false;
+          child.castShadow = false;
+          child.receiveShadow = false;
+
+          // Store original properties
+          const originalMap = child.material?.map || null;
+          const hasVertexColors = Boolean(child.material?.vertexColors || child.geometry?.attributes?.color);
+
+          if (originalMap) {
+            originalMap.colorSpace = THREE.SRGBColorSpace;
+          }
+
+          // Swap to unlit material
+          child.material = new THREE.MeshBasicMaterial({
+            map: originalMap,
+            vertexColors: hasVertexColors,
+            side: THREE.DoubleSide, // Prevents invisible back-faces
+            color: 0xffffff,
+          });
+          child.material.needsUpdate = true;
+        }
+      });
+    }
+  }, [scene]);
+
   useEffect(() => {
     if (!groupRef.current || !scene) return;
 
-    // 1. Ensure photogrammetry mesh renders with true photographic colors and zero shadow acne
-    scene.traverse((child) => {
-      if (child.isMesh) {
-        child.frustumCulled = false;
-        // Never cast self-shadows on complex photogrammetry scan mesh (eliminates shadow acne and black speckles)
-        child.castShadow = false;
-        child.receiveShadow = false;
-
-        if (child.material) {
-          child.material.side = THREE.DoubleSide;
-          child.material.depthWrite = true;
-          child.material.transparent = false;
-          child.material.opacity = 1.0;
-
-          if (child.material.map) {
-            child.material.map.colorSpace = THREE.SRGBColorSpace;
-            child.material.map.minFilter = THREE.LinearMipmapLinearFilter;
-            child.material.map.magFilter = THREE.LinearFilter;
-            child.material.map.generateMipmaps = true;
-            child.material.map.needsUpdate = true;
-          }
-
-          // Unlit photographic colors: renders exact camera photo pixels with zero shadow acne or dark blotches
-          if (!child.material.isMeshBasicMaterial) {
-            const oldMap = child.material.map;
-            child.material = new THREE.MeshBasicMaterial({
-              map: oldMap,
-              side: THREE.DoubleSide,
-              color: 0xffffff,
-            });
-          }
-          child.material.needsUpdate = true;
-        }
-      }
-    });
-
-    // 2. Reset transforms for accurate measurement
+    // Reset transforms for accurate measurement
     groupRef.current.position.set(0, 0, 0);
     groupRef.current.scale.set(1, 1, 1);
     groupRef.current.rotation.set(0, 0, 0);
@@ -204,8 +274,9 @@ function ModelWithCamera({
 
     if (xs.length < 10) return;
 
-    // In COLMAP / OpenMVS, cameras use OpenCV Y-down coordinates, so floor surfaces predominantly face -Y (downNormals > upNormals).
-    // An un-flipped COLMAP mesh needs rotationX = Math.PI to be upright (+Y up) in Three.js.
+    // [Orientation Check - Preserved for inverted raw meshes]
+    // DUSt3R neural reconstruction generates canonical +Y-up meshes directly.
+    // For legacy/un-flipped camera coordinates, rotationX = Math.PI is applied if downNormals > upNormals.
     const isCOLMAPInverted = downNormals > upNormals || (upNormals === 0 && downNormals === 0);
     const rotationX = isCOLMAPInverted ? Math.PI : 0;
 
@@ -363,14 +434,68 @@ function ModelWithCamera({
       controlsRef.current.update();
     }
 
+    // Sample final world-space vertices after all transforms are applied
+    const worldVerts = [];
+    let bMinX = Infinity, bMaxX = -Infinity;
+    let bMinY = Infinity, bMaxY = -Infinity;
+    let bMinZ = Infinity, bMaxZ = -Infinity;
+
+    scene.traverse((child) => {
+      if (child.isMesh && child.geometry?.attributes?.position) {
+        const pos = child.geometry.attributes.position;
+        const v = new THREE.Vector3();
+        const step = Math.max(1, Math.floor(pos.count / 2500));
+        for (let i = 0; i < pos.count; i += step) {
+          v.fromBufferAttribute(pos, i);
+          v.applyMatrix4(child.matrixWorld);
+          worldVerts.push({ x: v.x, y: v.y, z: v.z });
+        }
+      }
+    });
+
+    const boundaryMarkers = serverBoundaryMarkers || computeRoomBoundaryMarkers(worldVerts, northOffset);
+
+    let roomMinX = p1_x, roomMaxX = p99_x;
+    let roomMinZ = p1_z, roomMaxZ = p99_z;
+    let roomFloorY = floorY, roomCeilY = ceilingY;
+
+    if (boundaryMarkers?.NW && boundaryMarkers?.SE && boundaryMarkers?.NE && boundaryMarkers?.SW) {
+      const bPts = [boundaryMarkers.NW, boundaryMarkers.NE, boundaryMarkers.SE, boundaryMarkers.SW];
+      roomMinX = Math.min(...bPts.map((p) => p[0]));
+      roomMaxX = Math.max(...bPts.map((p) => p[0]));
+      roomMinZ = Math.min(...bPts.map((p) => p[2]));
+      roomMaxZ = Math.max(...bPts.map((p) => p[2]));
+      roomFloorY = Number(((boundaryMarkers.NW[1] ?? 0.35) - 0.33).toFixed(3));
+    }
+
+    const realCenter = [
+      Number(((roomMinX + roomMaxX) / 2).toFixed(3)),
+      Number(roomFloorY.toFixed(3)),
+      Number(((roomMinZ + roomMaxZ) / 2).toFixed(3)),
+    ];
+    const realBounds = {
+      min: [Number(roomMinX.toFixed(3)), Number(roomFloorY.toFixed(3)), Number(roomMinZ.toFixed(3))],
+      max: [Number(roomMaxX.toFixed(3)), Number(roomCeilY.toFixed(3)), Number(roomMaxZ.toFixed(3))],
+      center: realCenter,
+      size: [
+        Number((roomMaxX - roomMinX).toFixed(3)),
+        Number((roomCeilY - roomFloorY).toFixed(3)),
+        Number((roomMaxZ - roomMinZ).toFixed(3)),
+      ],
+      radius: Math.min(roomMaxX - roomMinX, roomMaxZ - roomMinZ) * 0.44,
+      floorY: Number(roomFloorY.toFixed(3)),
+    };
+
     if (onModelInfo) {
       onModelInfo({
-        center: [0, 0, 0],
-        floorY: 0,
+        center: realCenter,
+        floorY: Number(roomFloorY.toFixed(3)),
         size: [finalSizeX, finalSizeY, finalSizeZ],
         radius: roomRadius,
         maxDim: maxSpan,
         modelScale,
+        boundaryMarkers,
+        bounds: realBounds,
       });
     }
   }, [scene, url, northOffset]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -403,8 +528,36 @@ function CameraTracker({ azimuthRef, controlsRef }) {
   return null;
 }
 
-// ── 3D Direction Markers (8 Directions, dynamically mapped to room walls & corners) ───────
-function DirectionMarkers({ northOffset = 0, target = [0, 0, 0], radius = 2.4, roomSize = null, onSelectDirection }) {
+// ── 3D Direction Markers (strictly on 4 room corners & 4 wall midpoints) ──
+function DirectionMarkers({ markers, northOffset = 0, target = [0, 0, 0], radius = 2.4, roomSize = null, onSelectDirection }) {
+  if (markers && Object.keys(markers).length > 0) {
+    return (
+      <>
+        {Object.entries(markers).map(([label, pos]) => {
+          const isNorth = label === "N";
+          const isPrimary = ["N", "S", "E", "W"].includes(label);
+          return (
+            <Html key={label} position={[pos[0], pos[1], pos[2]]} center distanceFactor={18}>
+              <div
+                className={`dir-marker ${
+                  isNorth ? "dir-north" : !isPrimary ? "dir-intercardinal" : ""
+                }`}
+                style={{ cursor: "pointer", pointerEvents: "auto" }}
+                title={`Click to face ${label}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelectDirection?.(label);
+                }}
+              >
+                {label}
+              </div>
+            </Html>
+          );
+        })}
+      </>
+    );
+  }
+
   const halfX = roomSize ? roomSize[0] * 0.48 : Math.max(2.4, (radius || 2.6) * 0.95);
   const halfZ = roomSize ? roomSize[2] * 0.48 : Math.max(2.4, (radius || 2.6) * 0.95);
 
@@ -438,7 +591,7 @@ function DirectionMarkers({ northOffset = 0, target = [0, 0, 0], radius = 2.4, r
               className={`dir-marker ${
                 isNorth ? "dir-north" : !isPrimary ? "dir-intercardinal" : ""
               }`}
-              style={{ cursor: "pointer" }}
+              style={{ cursor: "pointer", pointerEvents: "auto" }}
               title={`Click to face ${label}`}
               onClick={(e) => {
                 e.stopPropagation();
@@ -462,7 +615,7 @@ function CompassOverlay({ azimuthRef, northOffset = 0, onAlignDirection }) {
   useEffect(() => {
     let raf;
     const tick = () => {
-      const az = azimuthRef.current;
+      const az = azimuthRef?.current || 0;
       const rot = -az + northOffset;
 
       if (roseRef.current) {
@@ -639,6 +792,7 @@ function Sidebar({
   onDrop, onDragOver, onDragLeave, onFileChange, onZoneClick,
   status, logs, onGenerate, onReset, isRunning,
   onOpenThreatDetection,
+  onFlipModel, isFlipping, hasModel,
 }) {
   const dotClass =
     status.done ? "done"
@@ -710,6 +864,18 @@ function Sidebar({
           <button id="btn-reset" className="btn-reset"
             onClick={onReset} disabled={isRunning && !status.error}>
             ↺ Reset
+          </button>
+        )}
+        {hasModel && (
+          <button
+            type="button"
+            id="btn-sidebar-flip"
+            className="btn-flip-sidebar"
+            onClick={onFlipModel}
+            disabled={isRunning || isFlipping}
+            title="Invert 3D room orientation 180° along X-axis"
+          >
+            {isFlipping ? "🔄 Flipping Orientation…" : "🔄 Flip Orientation"}
           </button>
         )}
         <button
@@ -796,13 +962,16 @@ export default function App() {
   const [logs, setLogs] = useState([]);
   const [isRunning, setIsRunning] = useState(false);
   const [modelUrl, setModelUrl] = useState(null);
+  const [flipKey, setFlipKey] = useState(0);
   const [modelKey, setModelKey] = useState(0);
+  const [isFlipping, setIsFlipping] = useState(false);
   const [modelInfo, setModelInfo] = useState(null);
   const sseRef = useRef(null);
 
   // ── Crime Recreation & Video Simulation State ────────────────────────
   const [planData, setPlanData] = useState(null);
   const [sceneObjects, setSceneObjects] = useState([]);
+  const [serverBoundaryMarkers, setServerBoundaryMarkers] = useState(null);
   const [isPlanning, setIsPlanning] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -811,6 +980,7 @@ export default function App() {
   const [showRoutes, setShowRoutes] = useState(true);
   const [showLabels, setShowLabels] = useState(true);
   const [showAnchors, setShowAnchors] = useState(false);
+  const [dummyHeightMultiplier, setDummyHeightMultiplier] = useState(1.0);
   const [geminiApiKey, setGeminiApiKey] = useState(
     () => localStorage.getItem("forensic_gemini_key") || ""
   );
@@ -822,6 +992,7 @@ export default function App() {
       if (r.ok) {
         const data = await r.json();
         if (data.objects) setSceneObjects(data.objects);
+        if (data.boundaryMarkers) setServerBoundaryMarkers(data.boundaryMarkers);
         if (data.northOffset !== undefined) {
           setNorthOffset(data.northOffset);
           setCalibrated(true);
@@ -830,16 +1001,46 @@ export default function App() {
     } catch (_) {}
   }, []);
 
-  // ── On mount / page refresh: clean up any earlier models so the user starts fresh ──
+  // ── On mount: check if model already exists so it displays immediately ──
   useEffect(() => {
-    setModelUrl(null);
-    setModelInfo(null);
-    setPlanData(null);
-    setSceneObjects([]);
-    setStatus({ phase: "idle", log: "", progress: 0, done: false, error: null });
-    // Tell backend to thoroughly clean up previous model artifacts
-    fetch(`${API}/api/reset`, { method: "POST" }).catch(() => {});
-  }, []);
+    fetch(`/models/scene_textured.glb`, { method: "HEAD" })
+      .then((r) => {
+        if (r.ok) {
+          setModelUrl("/models/scene_textured.glb");
+          fetchSceneObjects();
+        } else {
+          setModelUrl(null);
+        }
+      })
+      .catch(() => {});
+  }, [fetchSceneObjects]);
+
+  // ── Manual flip orientation handler ─────────────────────────────────
+  const handleFlipModel = useCallback(async () => {
+    if (isFlipping) return;
+    setIsFlipping(true);
+    try {
+      const res = await fetch(`${API}/api/flip-model`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || `Server responded with ${res.status}`);
+      }
+
+      // 1. Call React Three Fiber's cache clearing utility
+      useGLTF.clear("/models/scene_textured.glb");
+
+      // 2. Increment state to force unmount & remount
+      setFlipKey((prev) => prev + 1);
+      fetchSceneObjects();
+    } catch (err) {
+      console.error("[FlipModel] Error flipping room orientation:", err);
+      alert(`Error flipping room orientation: ${err.message}`);
+    } finally {
+      setIsFlipping(false);
+    }
+  }, [isFlipping, fetchSceneObjects]);
 
   const modelUrlToLoad = modelUrl;
 
@@ -851,13 +1052,14 @@ export default function App() {
         const halfX = (modelInfo?.size?.[0] || 6.0) / 2;
         const halfZ = (modelInfo?.size?.[2] || 6.0) / 2;
         const heightY = modelInfo?.size?.[1] || 3.8;
-        const boundsPayload = {
+        const fallbackBounds = {
           min: [-halfX, 0, -halfZ],
           max: [halfX, heightY, halfZ],
           center: [0, 0, 0],
           size: [halfX * 2, heightY, halfZ * 2],
           radius: modelInfo?.radius || Math.hypot(halfX, halfZ) * 0.7,
         };
+        const boundsPayload = modelInfo?.bounds || fallbackBounds;
 
         const res = await fetch(`${API}/api/recreation/plan`, {
           method: "POST",
@@ -866,6 +1068,7 @@ export default function App() {
             prompt: promptText,
             apiKey: geminiApiKey || undefined,
             bounds: boundsPayload,
+            boundaryMarkers: modelInfo?.boundaryMarkers,
             directionMeta: {
               direction: "N",
               northOffset: northOffset || 0,
@@ -949,8 +1152,9 @@ export default function App() {
       if (data.log) setLogs((p) => [...p.slice(-200), data.log]);
       if (data.done) {
         setIsRunning(false);
-        setModelUrl(`${API}/models/scene_textured.glb?t=${Date.now()}`);
-        setModelKey((k) => k + 1);
+        useGLTF.clear("/models/scene_textured.glb");
+        setModelUrl("/models/scene_textured.glb");
+        setFlipKey((prev) => prev + 1);
         fetchSceneObjects();
       }
       if (data.error || data.phase === "error") {
@@ -1058,6 +1262,9 @@ export default function App() {
 
   const sceneCenter = [0, 0, 0];
   const sceneRadius = modelInfo?.radius || 2.4;
+  const roomHeight = modelInfo?.size?.[1] || planData?.plan?.roomHeight || 2.85;
+  const effectiveDummyScale = Math.min(2.5, Math.max(0.4, (roomHeight / 2.85) * dummyHeightMultiplier));
+  const dummyHeightMeters = Number((1.80 * effectiveDummyScale).toFixed(2));
 
   return (
     <div className="app">
@@ -1076,6 +1283,9 @@ export default function App() {
         onReset={handleReset}
         isRunning={isRunning}
         onOpenThreatDetection={() => setActiveTab("threat_detection")}
+        onFlipModel={handleFlipModel}
+        isFlipping={isFlipping}
+        hasModel={Boolean(modelUrlToLoad || status.done)}
       />
 
       {/* ── 3D Viewer & Simulation Canvas ── */}
@@ -1110,6 +1320,17 @@ export default function App() {
                 onClick={() => alignCameraToDirection("N")}
               >
                 🎯 Face North
+              </button>
+            )}
+            {activeTab !== "threat_detection" && modelUrl && (
+              <button
+                id="btn-flip-orientation"
+                className="btn-face-quick btn-flip-quick"
+                title="Invert 3D room orientation 180° along X-axis"
+                onClick={handleFlipModel}
+                disabled={isFlipping}
+              >
+                {isFlipping ? "🔄 Flipping…" : "🔄 Flip Orientation"}
               </button>
             )}
           </div>
@@ -1163,6 +1384,11 @@ export default function App() {
               onScrollTo3D={() => {
                 document.getElementById("simulation-canvas-section")?.scrollIntoView({ behavior: "smooth" });
               }}
+              roomHeight={roomHeight}
+              dummyHeight={dummyHeightMeters}
+              dummyScale={effectiveDummyScale}
+              dummyHeightMultiplier={dummyHeightMultiplier}
+              onDummyHeightMultiplierChange={setDummyHeightMultiplier}
             />
           </div>
         )}
@@ -1185,6 +1411,7 @@ export default function App() {
           >
             <Canvas
               key={modelKey}
+              flat={true}
               camera={{ position: [0, 2.5, 5.5], fov: 55, near: 0.01, far: 500 }}
               style={{ width: "100%", height: "100%" }}
               gl={{ preserveDrawingBuffer: true, antialias: true }}
@@ -1204,47 +1431,24 @@ export default function App() {
                 fadeDistance={35}
               />
 
-              {/* Architectural Grounding Plinth / Forensic Diorama Base */}
-              <group position={[sceneCenter[0], -0.04, sceneCenter[2]]}>
-                <mesh receiveShadow position={[0, -0.02, 0]}>
-                  <cylinderGeometry args={[Math.max(3.8, sceneRadius * 1.35), Math.max(4.0, sceneRadius * 1.4), 0.08, 64]} />
-                  <meshStandardMaterial
-                    color="#141721"
-                    roughness={0.92}
-                    metalness={0.04}
-                  />
-                </mesh>
-                <mesh position={[0, 0.025, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-                  <ringGeometry args={[Math.max(3.7, sceneRadius * 1.32), Math.max(3.75, sceneRadius * 1.35), 64]} />
-                  <meshBasicMaterial color="#38bdf8" opacity={0.3} transparent />
-                </mesh>
-              </group>
-
               {/* Model if available */}
               {modelUrlToLoad && (
                 <Suspense fallback={null}>
                   <ModelWithCamera
+                    key={flipKey}
                     url={modelUrlToLoad}
                     controlsRef={controlsRef}
                     onModelInfo={setModelInfo}
                     northOffset={northOffset}
+                    serverBoundaryMarkers={serverBoundaryMarkers}
                   />
                 </Suspense>
               )}
 
-              {/* Fallback room wireframe and compass if no photogrammetry mesh */}
-              {!modelUrlToLoad && (
-                <ForensicSpatialRoom
-                  center={sceneCenter}
-                  radius={sceneRadius}
-                  northOffset={northOffset}
-                  roomSize={modelInfo?.size}
-                />
-              )}
-
-              {/* Direction markers (both 3D Scene and Recreation Studio tabs) */}
+              {/* 3D Direction Markers (strictly on 4 room corners & 4 wall midpoints) */}
               {compassCalibrated && (
                 <DirectionMarkers
+                  markers={modelInfo?.boundaryMarkers}
                   northOffset={northOffset}
                   target={sceneCenter}
                   radius={sceneRadius}
@@ -1257,7 +1461,7 @@ export default function App() {
               {activeTab === "3d_scene" && showAnchors && sceneObjects.length > 0 && (
                 <group>
                   {sceneObjects.map((obj) => (
-                    <SceneAnchorMarker key={obj.id} name={obj.id} anchor={obj} />
+                    <SceneAnchorMarker key={obj.id} name={obj.id} anchor={obj} dummyScale={effectiveDummyScale} />
                   ))}
                 </group>
               )}
@@ -1276,6 +1480,9 @@ export default function App() {
                   showAnchors={showAnchors}
                   center={sceneCenter}
                   radius={sceneRadius}
+                  roomHeight={roomHeight}
+                  roomSize={modelInfo?.size}
+                  dummyScale={effectiveDummyScale}
                 />
               )}
 
@@ -1311,7 +1518,7 @@ export default function App() {
               </div>
             )}
 
-            {/* Compass overlay */}
+            {/* Interactive 2D Compass Overlay */}
             <CompassOverlay
               azimuthRef={azimuthRef}
               northOffset={northOffset}

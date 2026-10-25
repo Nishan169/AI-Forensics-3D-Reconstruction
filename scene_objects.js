@@ -81,9 +81,9 @@ export function getSectorForPosition(pos, center = [0, 0], northOffset = 0, room
  * Room corners: NW, NE, SW, SE
  * Center: Center
  */
-export function generateDynamicRoomObjects(bounds, baseDir = null, northOffset = 0) {
+export function generateDynamicRoomObjects(bounds, baseDir = null, northOffset = 0, boundaryMarkers = null) {
   const cwd = baseDir || process.cwd();
-  const navGrid = NavGrid.loadActiveSceneGrid(cwd) || NavGrid.fromBoundsAndAnchors(bounds, {});
+  const navGrid = NavGrid.createSceneGrid(bounds, {}, [], boundaryMarkers);
 
   const objects = [];
 
@@ -106,6 +106,27 @@ export function generateDynamicRoomObjects(bounds, baseDir = null, northOffset =
     distance: 0.0,
     isCenter: true,
     displayBadge: "🪑 Victim Chair [Center]"
+  });
+
+  // Central Living Room Table
+  const tablePos = [safeCenter.pos[0], Number((safeCenter.pos[1] - 0.85).toFixed(3))];
+  objects.push({
+    id: "table_center",
+    type: "table",
+    label: "Living Room Table",
+    icon: "🪵",
+    pos: tablePos,
+    y: safeCenter.y ?? 0.02,
+    inward: [0.0, 1.0],
+    size: [1.3, 0.85],
+    verified: true,
+    confidence: 0.96,
+    sector: "Center",
+    sectorLabel: "Center",
+    bearing: 0.0,
+    distance: 0.85,
+    isCenter: true,
+    displayBadge: "🪵 Living Room Table [Center]"
   });
 
   // 2. 8 Cardinal sectors:
@@ -181,11 +202,13 @@ export function generateDynamicRoomObjects(bounds, baseDir = null, northOffset =
     }
   }
 
-  // Persist to output/scene_objects.json
+  // Only persist to output/scene_objects.json if the file doesn't already exist or has fewer objects
   try {
     const outPath = path.resolve(cwd, "output/scene_objects.json");
-    fs.mkdirSync(path.dirname(outPath), { recursive: true });
-    fs.writeFileSync(outPath, JSON.stringify(objects, null, 2));
+    if (!fs.existsSync(outPath) || fs.statSync(outPath).size < 100) {
+      fs.mkdirSync(path.dirname(outPath), { recursive: true });
+      fs.writeFileSync(outPath, JSON.stringify(objects, null, 2));
+    }
   } catch (_) {}
 
   return objects;
@@ -194,14 +217,14 @@ export function generateDynamicRoomObjects(bounds, baseDir = null, northOffset =
 /**
  * Load or initialize physical scene objects for the current room
  */
-export function loadPhysicalSceneObjects(baseDir = null, bounds = null, northOffset = 0) {
+export function loadPhysicalSceneObjects(baseDir = null, bounds = null, northOffset = 0, boundaryMarkers = null) {
   const cwd = baseDir || process.cwd();
   const objectsFile = path.resolve(cwd, "output/scene_objects.json");
 
-  const minX = bounds?.min?.[0] ?? -5.0;
-  const maxX = bounds?.max?.[0] ?? 5.0;
-  const minZ = bounds?.min?.[2] ?? -5.0;
-  const maxZ = bounds?.max?.[2] ?? 5.0;
+  const minX = bounds?.min?.[0] ?? -12.0;
+  const maxX = bounds?.max?.[0] ?? 12.0;
+  const minZ = bounds?.min?.[2] ?? -12.0;
+  const maxZ = bounds?.max?.[2] ?? 12.0;
   const cx = bounds?.center?.[0] || 0;
   const cz = bounds?.center?.[2] || bounds?.center?.[1] || 0;
   const center = [cx, cz];
@@ -217,8 +240,8 @@ export function loadPhysicalSceneObjects(baseDir = null, bounds = null, northOff
         // Verify that cached objects actually fit within current model bounds
         const fitsBounds = parsed.every(obj => {
           if (!Array.isArray(obj.pos)) return false;
-          return obj.pos[0] >= minX - 2.0 && obj.pos[0] <= maxX + 2.0 &&
-                 obj.pos[1] >= minZ - 2.0 && obj.pos[1] <= maxZ + 2.0;
+          return obj.pos[0] >= minX - 0.35 && obj.pos[0] <= maxX + 0.35 &&
+                 obj.pos[1] >= minZ - 0.35 && obj.pos[1] <= maxZ + 0.35;
         });
         if (fitsBounds) {
           rawObjects = parsed;
@@ -229,9 +252,47 @@ export function loadPhysicalSceneObjects(baseDir = null, bounds = null, northOff
     } catch (_) {}
   }
 
+  // Check for boundary markers (from parameter or output/boundary_markers.json)
+  let effectiveMarkers = boundaryMarkers;
+  if (!effectiveMarkers) {
+    try {
+      const bmPath = path.resolve(cwd, "output/boundary_markers.json");
+      if (fs.existsSync(bmPath)) {
+        const parsedBM = JSON.parse(fs.readFileSync(bmPath, "utf8"));
+        if (parsedBM && parsedBM.NW && parsedBM.SE) {
+          const markersFit = [parsedBM.NW, parsedBM.NE, parsedBM.SE, parsedBM.SW].filter(Boolean).every(pt => {
+            return pt[0] >= minX - 0.50 && pt[0] <= maxX + 0.50 &&
+                   pt[2] >= minZ - 0.50 && pt[2] <= maxZ + 0.50;
+          });
+          if (markersFit) {
+            effectiveMarkers = parsedBM;
+          } else {
+            console.log(`[scene_objects] Cached boundary_markers.json does not match active model bounds. Using dynamic markers.`);
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  // If still no effectiveMarkers and bounds is provided, generate clean dynamic boundary markers strictly inside bounds
+  if (!effectiveMarkers && bounds && bounds.min && bounds.max) {
+    const floorY = bounds?.floorY ?? bounds?.min?.[1] ?? 0.02;
+    const markerY = Number((floorY + 0.35).toFixed(3));
+    effectiveMarkers = {
+      NW: [Number((minX + 0.15).toFixed(3)), markerY, Number((minZ + 0.15).toFixed(3))],
+      NE: [Number((maxX - 0.15).toFixed(3)), markerY, Number((minZ + 0.15).toFixed(3))],
+      SE: [Number((maxX - 0.15).toFixed(3)), markerY, Number((maxZ - 0.15).toFixed(3))],
+      SW: [Number((minX + 0.15).toFixed(3)), markerY, Number((maxZ - 0.15).toFixed(3))],
+      N: [Number(cx.toFixed(3)), markerY, Number((minZ + 0.15).toFixed(3))],
+      S: [Number(cx.toFixed(3)), markerY, Number((maxZ - 0.15).toFixed(3))],
+      E: [Number((maxX - 0.15).toFixed(3)), markerY, Number(cz.toFixed(3))],
+      W: [Number((minX + 0.15).toFixed(3)), markerY, Number(cz.toFixed(3))],
+    };
+  }
+
   // If no valid cached objects for this model, generate 100% dynamic boundary anchors
   if (rawObjects.length === 0) {
-    rawObjects = generateDynamicRoomObjects(bounds, cwd, northOffset);
+    rawObjects = generateDynamicRoomObjects(bounds, cwd, northOffset, effectiveMarkers);
   }
 
   // Augment every object with its exact 8-direction cardinal sector based on current northOffset
@@ -248,6 +309,152 @@ export function loadPhysicalSceneObjects(baseDir = null, bounds = null, northOff
     };
   });
 
+  // Harmonize all perimeter doors, sector furniture, and center anchors strictly with boundary markers if present
+  if (effectiveMarkers && typeof effectiveMarkers === "object") {
+    // Calibrate true room center from boundary markers
+    let markerCenterX = center[0];
+    let markerCenterZ = center[1];
+    let markerFloorY = bounds?.floorY ?? bounds?.min?.[1] ?? 0.02;
+
+    if (effectiveMarkers.NW && effectiveMarkers.SE) {
+      markerCenterX = Number(((effectiveMarkers.NW[0] + effectiveMarkers.SE[0]) / 2.0).toFixed(3));
+      markerCenterZ = Number(((effectiveMarkers.NW[2] + effectiveMarkers.SE[2]) / 2.0).toFixed(3));
+      markerFloorY = Number(((effectiveMarkers.NW[1] ?? 0.35) - 0.33).toFixed(3));
+    } else {
+      const keys = Object.keys(effectiveMarkers);
+      if (keys.length > 0) {
+        markerCenterX = Number((keys.reduce((s, k) => s + effectiveMarkers[k][0], 0) / keys.length).toFixed(3));
+        markerCenterZ = Number((keys.reduce((s, k) => s + effectiveMarkers[k][2], 0) / keys.length).toFixed(3));
+        markerFloorY = Number(((effectiveMarkers[keys[0]][1] ?? 0.35) - 0.33).toFixed(3));
+      }
+    }
+
+    center[0] = markerCenterX;
+    center[1] = markerCenterZ;
+
+    // Harmonize Center furniture (chair_center) strictly at true room center
+    const centerPos = [markerCenterX, markerCenterZ];
+    const existingCenterChair = labelledObjects.find(o => o.id === "chair_center");
+    if (existingCenterChair) {
+      existingCenterChair.pos = centerPos;
+      existingCenterChair.y = markerFloorY;
+      existingCenterChair.distance = 0.0;
+      existingCenterChair.bearing = 0.0;
+      existingCenterChair.sector = "Center";
+      existingCenterChair.isCenter = true;
+    } else {
+      labelledObjects.unshift({
+        id: "chair_center",
+        type: "chair",
+        label: "Victim Chair",
+        icon: "🪑",
+        pos: centerPos,
+        y: markerFloorY,
+        inward: [0.0, -1.0],
+        size: [0.65, 0.65],
+        verified: true,
+        confidence: 0.98,
+        sector: "Center",
+        sectorLabel: "Center",
+        bearing: 0.0,
+        distance: 0.0,
+        isCenter: true,
+        displayBadge: "🪑 Victim Chair [Center]"
+      });
+    }
+
+    // Harmonize table_center: ensure realistic size and position offset from center chair
+    const existingCenterTable = labelledObjects.find(o => o.id === "table_center");
+    if (existingCenterTable) {
+      existingCenterTable.size = [
+        Math.min(1.40, existingCenterTable.size?.[0] || 1.20),
+        Math.min(0.90, existingCenterTable.size?.[1] || 0.70)
+      ];
+      if (Math.hypot(existingCenterTable.pos[0] - markerCenterX, existingCenterTable.pos[1] - markerCenterZ) < 0.75) {
+        existingCenterTable.pos = [markerCenterX, Number((markerCenterZ - 0.85).toFixed(3))];
+        existingCenterTable.inward = [0.0, 1.0];
+      }
+    }
+
+    for (const sec of CARDINAL_SECTORS) {
+      const code = sec.code;
+      if (effectiveMarkers[code]) {
+        const pt = effectiveMarkers[code];
+        const dPos = [Number(pt[0].toFixed(3)), Number(pt[2].toFixed(3))];
+        const dY = Number((pt[1] ?? 0.02).toFixed(3));
+        const inwDx = markerCenterX - dPos[0];
+        const inwDz = markerCenterZ - dPos[1];
+        const inwLen = Math.hypot(inwDx, inwDz) || 1.0;
+        const dInw = [Number((inwDx / inwLen).toFixed(3)), Number((inwDz / inwLen).toFixed(3))];
+
+        // Harmonize door at boundary marker
+        const doorId = `door_${code.toLowerCase()}`;
+        const existingDoor = labelledObjects.find(o => o.id === doorId);
+        if (existingDoor) {
+          existingDoor.pos = dPos;
+          existingDoor.y = dY;
+          existingDoor.inward = dInw;
+          existingDoor.distance = Number(Math.hypot(dPos[0] - markerCenterX, dPos[1] - markerCenterZ).toFixed(2));
+          existingDoor.bearing = sec.angle;
+        } else {
+          labelledObjects.push({
+            id: doorId,
+            type: "door",
+            label: `${sec.label} Door`,
+            icon: "🚪",
+            pos: dPos,
+            y: dY,
+            inward: dInw,
+            size: [1.2, 2.1],
+            verified: true,
+            confidence: 0.99,
+            sector: code,
+            sectorLabel: sec.label,
+            bearing: sec.angle,
+            distance: Number(Math.hypot(dPos[0] - markerCenterX, dPos[1] - markerCenterZ).toFixed(2)),
+            isCenter: false,
+            displayBadge: `🚪 ${sec.label} Door [${code}]`
+          });
+        }
+
+        // Harmonize sector chair: dynamically positioned 70% from room center towards boundary marker
+        const chairPos = [
+          Number((markerCenterX + 0.70 * (dPos[0] - markerCenterX)).toFixed(3)),
+          Number((markerCenterZ + 0.70 * (dPos[1] - markerCenterZ)).toFixed(3))
+        ];
+        const chairDist = Number(Math.hypot(chairPos[0] - markerCenterX, chairPos[1] - markerCenterZ).toFixed(2));
+        const chairId = `chair_${code.toLowerCase()}`;
+        const existingChair = labelledObjects.find(o => o.id === chairId);
+        if (existingChair) {
+          existingChair.pos = chairPos;
+          existingChair.y = markerFloorY;
+          existingChair.inward = dInw;
+          existingChair.distance = chairDist;
+          existingChair.bearing = sec.angle;
+        } else {
+          labelledObjects.push({
+            id: chairId,
+            type: "chair",
+            label: `${sec.label} Chair`,
+            icon: "🪑",
+            pos: chairPos,
+            y: markerFloorY,
+            inward: dInw,
+            size: [0.65, 0.65],
+            verified: true,
+            confidence: 0.95,
+            sector: code,
+            sectorLabel: sec.label,
+            bearing: sec.angle,
+            distance: chairDist,
+            isCenter: false,
+            displayBadge: `🪑 ${sec.label} Chair [${code}]`
+          });
+        }
+      }
+    }
+  }
+
   return labelledObjects;
 }
 
@@ -255,9 +462,32 @@ export function loadPhysicalSceneObjects(baseDir = null, bounds = null, northOff
  * Verifies a requested crime target against detected physical room objects.
  * If target does not physically exist in the requested direction, snaps to the closest real object.
  */
-export function verifyTargetObject(targetName, physicalObjects, bounds = null, northOffset = 0) {
+export function verifyTargetObject(targetName, physicalObjects, bounds = null, northOffset = 0, boundaryMarkers = null) {
   const center = [bounds?.center?.[0] || 0, bounds?.center?.[2] || bounds?.center?.[1] || 0];
   const radius = bounds?.radius || 5.2;
+
+  let effectiveMarkers = boundaryMarkers;
+  if (!effectiveMarkers) {
+    try {
+      const bmPath = path.resolve(process.cwd(), "output/boundary_markers.json");
+      if (fs.existsSync(bmPath)) {
+        effectiveMarkers = JSON.parse(fs.readFileSync(bmPath, "utf8"));
+      }
+    } catch (_) {}
+  }
+
+  if (effectiveMarkers && typeof effectiveMarkers === "object") {
+    if (effectiveMarkers.NW && effectiveMarkers.SE) {
+      center[0] = Number(((effectiveMarkers.NW[0] + effectiveMarkers.SE[0]) / 2.0).toFixed(3));
+      center[1] = Number(((effectiveMarkers.NW[2] + effectiveMarkers.SE[2]) / 2.0).toFixed(3));
+    } else {
+      const keys = Object.keys(effectiveMarkers);
+      if (keys.length > 0) {
+        center[0] = Number((keys.reduce((s, k) => s + effectiveMarkers[k][0], 0) / keys.length).toFixed(3));
+        center[1] = Number((keys.reduce((s, k) => s + effectiveMarkers[k][2], 0) / keys.length).toFixed(3));
+      }
+    }
+  }
 
   const rawLower = String(targetName || "").toLowerCase().trim();
 
@@ -287,6 +517,7 @@ export function verifyTargetObject(targetName, physicalObjects, bounds = null, n
     chair_south_east: "chair_se",
     chair_southwest: "chair_sw",
     chair_south_west: "chair_sw",
+    chair_middle: "chair_center",
     window_south: "window_s",
     window_north: "window_n",
     window_west: "window_w",
@@ -305,6 +536,7 @@ export function verifyTargetObject(targetName, physicalObjects, bounds = null, n
     victim_southeast: "chair_se",
     victim_south_east: "chair_se",
     victim_center: "chair_center",
+    victim_middle: "chair_center",
     // Cardinal shorthand to sector anchor
     north: "chair_n",
     south: "chair_s",
@@ -320,16 +552,43 @@ export function verifyTargetObject(targetName, physicalObjects, bounds = null, n
     south_east: "chair_se",
     center: "chair_center",
     middle: "chair_center",
+    room_center: "chair_center",
   };
   const resolvedTargetId = aliasMap[rawLower] || targetName || rawLower;
   const directIdMatch = physicalObjects.find((o) => o.id === resolvedTargetId || o.id === targetName || o.id === rawLower);
   if (directIdMatch) {
+    let pPos = directIdMatch.pos;
+    let pY = directIdMatch.y ?? 0.02;
+    let pInw = directIdMatch.inward || [0, 1];
+    if (directIdMatch.type === "door" && directIdMatch.sector && effectiveMarkers?.[directIdMatch.sector]) {
+      const bm = effectiveMarkers[directIdMatch.sector];
+      pPos = [Number(bm[0].toFixed(3)), Number(bm[2].toFixed(3))];
+      pY = Number((bm[1] ?? 0.02).toFixed(3));
+      const inwDx = center[0] - pPos[0];
+      const inwDz = center[1] - pPos[1];
+      const inwLen = Math.hypot(inwDx, inwDz) || 1.0;
+      pInw = [Number((inwDx / inwLen).toFixed(3)), Number((inwDz / inwLen).toFixed(3))];
+    } else if (directIdMatch.isCenter || directIdMatch.sector === "Center" || resolvedTargetId === "chair_center") {
+      pPos = [center[0], center[1]];
+      pInw = [0, -1];
+    } else if ((directIdMatch.type === "chair" || directIdMatch.type === "couch" || directIdMatch.type === "bed") && directIdMatch.sector && effectiveMarkers?.[directIdMatch.sector]) {
+      const bm = effectiveMarkers[directIdMatch.sector];
+      pPos = [
+        Number((center[0] + 0.70 * (bm[0] - center[0])).toFixed(3)),
+        Number((center[1] + 0.70 * (bm[2] - center[1])).toFixed(3))
+      ];
+      pY = Number((bm[1] ?? 0.02).toFixed(3));
+      const inwDx = center[0] - pPos[0];
+      const inwDz = center[1] - pPos[1];
+      const inwLen = Math.hypot(inwDx, inwDz) || 1.0;
+      pInw = [Number((inwDx / inwLen).toFixed(3)), Number((inwDz / inwLen).toFixed(3))];
+    }
     return {
       verified: true,
       status: "verified",
-      pos: directIdMatch.pos,
-      y: directIdMatch.y ?? 0.02,
-      inward: directIdMatch.inward || [0, 1],
+      pos: pPos,
+      y: pY,
+      inward: pInw,
       targetKey: directIdMatch.id,
       label: `${directIdMatch.label} (${directIdMatch.sector})`,
       objectType: directIdMatch.type,
@@ -435,19 +694,54 @@ export function verifyTargetObject(targetName, physicalObjects, bounds = null, n
       };
     }
 
-    // C. If user explicitly requested a cardinal sector for furniture, calculate position in that sector covering full room area
+    // C. If user explicitly requested Center / Middle for furniture
+    if (reqDir === "Center" || reqType === "center") {
+      return {
+        verified: true,
+        status: "verified",
+        pos: [center[0], center[1]],
+        y: bounds?.floorY ?? 0.02,
+        inward: [0, -1],
+        targetKey: "chair_center",
+        label: "Victim Chair [Center]",
+        objectType: "chair",
+        sector: "Center",
+        sectorLabel: "Center",
+        message: "✅ Verified: Victim placed at room center.",
+        confidence: 0.98
+      };
+    }
+
+    // D. If user explicitly requested a cardinal sector for furniture, calculate position in that sector covering full room area
     if (reqDir && reqDir !== "Center" && reqDir !== "Corner") {
       const secMeta = CARDINAL_SECTORS.find((s) => s.code === reqDir) || { code: reqDir, label: reqDir, angle: 45 };
-      const navGrid = NavGrid.loadActiveSceneGrid() || NavGrid.fromBoundsAndAnchors(bounds, {});
-      const safe = navGrid.getSafeDirectionPosition(reqDir, 0.25, 0.72);
+      let safePos, safeY, safeInw;
+      if (effectiveMarkers?.[reqDir]) {
+        const bm = effectiveMarkers[reqDir];
+        safePos = [
+          Number((center[0] + 0.70 * (bm[0] - center[0])).toFixed(3)),
+          Number((center[1] + 0.70 * (bm[2] - center[1])).toFixed(3))
+        ];
+        safeY = Number((bm[1] ?? 0.02).toFixed(3));
+        const inwDx = center[0] - safePos[0];
+        const inwDz = center[1] - safePos[1];
+        const inwLen = Math.hypot(inwDx, inwDz) || 1.0;
+        safeInw = [Number((inwDx / inwLen).toFixed(3)), Number((inwDz / inwLen).toFixed(3))];
+      } else {
+        const navGrid = NavGrid.loadActiveSceneGrid() || NavGrid.fromBoundsAndAnchors(bounds, {});
+        const safe = navGrid.getSafeDirectionPosition(reqDir, 0.25, 0.72);
+        safePos = safe.pos;
+        safeY = safe.y;
+        safeInw = safe.inward;
+      }
       const typeLabel = reqType.charAt(0).toUpperCase() + reqType.slice(1);
       const objLabel = `${secMeta.label} ${typeLabel}`;
       return {
         verified: true,
         status: "verified",
-        pos: safe.pos,
-        y: safe.y,
-        inward: safe.inward,
+        pos: safePos,
+        y: safeY,
+        inward: safeInw,
         targetKey: `${reqType}_${reqDir.toLowerCase()}`,
         label: `${objLabel} [${reqDir}]`,
         objectType: reqType,
@@ -458,7 +752,7 @@ export function verifyTargetObject(targetName, physicalObjects, bounds = null, n
       };
     }
 
-    // D. Check if ANY furniture of this type exists in the room (when no specific direction was requested)
+    // E. Check if ANY furniture of this type exists in the room (when no specific direction was requested)
     const anyMatching = physicalObjects.find((o) => {
       return o.type === reqType || (reqType === "table" && o.type === "desk");
     });
@@ -501,6 +795,32 @@ export function verifyTargetObject(targetName, physicalObjects, bounds = null, n
   if (isPortal) {
     // A. If a cardinal direction was specified (e.g., "south door", "north window")
     if (reqDir && reqDir !== "Center" && reqDir !== "Corner") {
+      // If boundary marker exists for requested direction, strictly snap door to it
+      if (effectiveMarkers && effectiveMarkers[reqDir]) {
+        const bm = effectiveMarkers[reqDir];
+        const bPos = [Number(bm[0].toFixed(3)), Number(bm[2].toFixed(3))];
+        const bY = Number((bm[1] ?? 0.02).toFixed(3));
+        const inwDx = center[0] - bPos[0];
+        const inwDz = center[1] - bPos[1];
+        const inwLen = Math.hypot(inwDx, inwDz) || 1.0;
+        const bInw = [Number((inwDx / inwLen).toFixed(3)), Number((inwDz / inwLen).toFixed(3))];
+        const sectorName = CARDINAL_SECTORS.find((s) => s.code === reqDir)?.label || reqDir;
+        return {
+          verified: true,
+          status: "verified",
+          pos: bPos,
+          y: bY,
+          inward: bInw,
+          targetKey: `${reqType || "door"}_${reqDir.toLowerCase()}`,
+          label: `${sectorName} ${reqType ? (reqType.charAt(0).toUpperCase() + reqType.slice(1)) : "Door"} [${reqDir}]`,
+          objectType: reqType || "door",
+          sector: reqDir,
+          sectorLabel: sectorName,
+          message: `✅ Verified: ${sectorName} Door aligned to boundary marker ${reqDir}.`,
+          confidence: 0.99
+        };
+      }
+
       // Check physicalObjects for a door/window in that specific sector
       const sectorPortal = physicalObjects.find((o) => {
         if (!o.sector || o.sector.toUpperCase() !== reqDir.toUpperCase()) return false;

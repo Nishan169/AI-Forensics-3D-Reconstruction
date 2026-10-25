@@ -59,7 +59,12 @@ export default function RecreationStudio({
   getCanvasElement,
   apiKey,
   onApiKeyChange,
-  onScrollTo3D
+  onScrollTo3D,
+  roomHeight,
+  dummyHeight,
+  dummyScale = 1.0,
+  dummyHeightMultiplier = 1.0,
+  onDummyHeightMultiplierChange
 }) {
   const [prompt, setPrompt] = useState(
     "Killer comes from north door and shoots a victim sitting in the middle of room and then runs away from same path."
@@ -352,7 +357,7 @@ export default function RecreationStudio({
               </select>
             </div>
 
-            {/* Layer Toggles */}
+            {/* Layer Toggles & Dynamic Dummy Height Control */}
             <div className="control-toggles">
               <label className="toggle-chip">
                 <input
@@ -372,7 +377,44 @@ export default function RecreationStudio({
                 Labels
               </label>
 
-
+              {/* Dynamic Dummy Height Indicator & Stepper */}
+              {dummyHeight && (
+                <div
+                  className="dummy-height-badge"
+                  title={`Dummies dynamically adapted to room ceiling (${roomHeight ? Number(roomHeight).toFixed(2) : "2.85"}m). Ratio: ${Math.round((dummyHeight / (roomHeight || 2.85)) * 100)}%`}
+                >
+                  <span className="dummy-badge-icon">🧍</span>
+                  <span className="dummy-badge-text">
+                    Dummy: <strong>{dummyHeight}m</strong>
+                  </span>
+                  <div className="dummy-stepper">
+                    <button
+                      type="button"
+                      className="stepper-btn"
+                      onClick={() => onDummyHeightMultiplierChange && onDummyHeightMultiplierChange(prev => Math.max(0.6, Number((prev - 0.05).toFixed(2))))}
+                      title="Slightly shorten dummy height"
+                    >
+                      −
+                    </button>
+                    <button
+                      type="button"
+                      className={`stepper-reset ${dummyHeightMultiplier === 1.0 ? "active" : ""}`}
+                      onClick={() => onDummyHeightMultiplierChange && onDummyHeightMultiplierChange(1.0)}
+                      title="Reset to 100% dynamic room-matched height"
+                    >
+                      Auto
+                    </button>
+                    <button
+                      type="button"
+                      className="stepper-btn"
+                      onClick={() => onDummyHeightMultiplierChange && onDummyHeightMultiplierChange(prev => Math.min(1.6, Number((prev + 0.05).toFixed(2))))}
+                      title="Slightly increase dummy height"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Video Record Button */}

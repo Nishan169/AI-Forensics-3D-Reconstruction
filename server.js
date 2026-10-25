@@ -33,10 +33,27 @@ app.get("/api/scene/images", (req, res) => {
   });
 });
 
+// Cross-platform Python resolver
+function getPythonBin() {
+  if (process.env.PYTHON_BIN) return process.env.PYTHON_BIN;
+  const candidates = [
+    path.join(__dirname, "venv", "bin", "python"),
+    path.join(__dirname, "venv", "Scripts", "python.exe"),
+    path.join(__dirname, ".venv", "bin", "python"),
+    path.join(__dirname, ".venv", "Scripts", "python.exe"),
+    path.join(__dirname, "threat_backend", "venv", "bin", "python"),
+    path.join(__dirname, "threat_backend", "venv", "Scripts", "python.exe"),
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  return process.platform === "win32" ? "python" : "python3";
+}
+
 // Ensure threat detection backend is running on port 8000
 function ensureThreatBackend() {
   const threatDir = path.join(__dirname, "threat_backend");
-  const venvPy = path.join(threatDir, "venv", "bin", "python");
+  const venvPy = getPythonBin();
   if (fs.existsSync(venvPy) && fs.existsSync(threatDir)) {
     fetch("http://127.0.0.1:8000/api/health")
       .catch(() => {
@@ -209,17 +226,19 @@ app.post("/api/upload",
     fs.mkdirSync(outputDir, { recursive: true });
     fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
 
-    // If COLMAP sparse reconstruction exists, run calibration immediately
-    const colmapDir = path.join(outputDir, "colmap", "sparse", "0");
-    if (fs.existsSync(colmapDir) && refImageName) {
-      const uvPath = "/Users/mohammadmojijansari/.local/bin/uv";
-      const pythonCmd = fs.existsSync(uvPath) ? uvPath : "python3";
+    // Auto-calibrate direction if camera poses exist from neural reconstruction
+    const dust3rPoses = path.join(outputDir, "camera_poses.json");
+    if (fs.existsSync(dust3rPoses) && refImageName) {
+      const pythonCmd = getPythonBin();
       const scriptPath = path.join(__dirname, "scripts", "calibrate_direction.py");
-      const py = spawn(pythonCmd, ["run", "--with", "pycolmap", "python3", scriptPath, refImageName, direction], { cwd: __dirname });
+      const py = spawn(pythonCmd, [scriptPath, refImageName, direction], { cwd: __dirname });
       py.on("close", () => {
         console.log(`[Upload] Auto-calibrated direction for ${refImageName} facing ${direction}`);
       });
     }
+    // [LEGACY / UNVISITED - Shifted from COLMAP to DUSt3R]
+    // const colmapDir = path.join(outputDir, "colmap", "sparse", "0");
+    // if (fs.existsSync(colmapDir) && refImageName) { ... }
 
     res.json({
       sceneCount: sceneFiles.length,
@@ -271,15 +290,14 @@ app.post("/api/direction/calibrate", (req, res) => {
       return res.json(dirMeta);
     }
     // Run python camera pose calibrator
-    const uvPath = "/Users/mohammadmojijansari/.local/bin/uv";
-    const pythonCmd = fs.existsSync(uvPath) ? uvPath : "python3";
+    const pythonCmd = getPythonBin();
     const scriptPath = path.join(__dirname, "scripts", "calibrate_direction.py");
     const detectPath = path.join(__dirname, "scripts", "detect_scene_objects.py");
-    const py = spawn(pythonCmd, ["run", "--with", "pycolmap", "python3", scriptPath, dirMeta.referenceImage || "", dirMeta.direction || "N"], { cwd: __dirname });
+    const py = spawn(pythonCmd, [scriptPath, dirMeta.referenceImage || "", dirMeta.direction || "N"], { cwd: __dirname });
     py.on("close", () => {
       // Refresh dynamic scene objects with new northOffset
       if (fs.existsSync(detectPath)) {
-        const detectPy = spawn(pythonCmd, ["run", "--with", "pycolmap", "--with", "trimesh", "--with", "scipy", "python3", detectPath], { cwd: __dirname });
+        const detectPy = spawn(pythonCmd, [detectPath], { cwd: __dirname });
         detectPy.on("close", () => {
           let updated = dirMeta;
           if (fs.existsSync(metaPath)) {
@@ -309,8 +327,13 @@ app.get("/api/scene/objects", (req, res) => {
       try { dirMeta = JSON.parse(fs.readFileSync(dirPath, "utf8")); } catch (_) {}
     }
     const northOffset = dirMeta.northOffset ?? dirMeta.angle ?? 0;
-    const objects = loadPhysicalSceneObjects(null, null, northOffset);
-    res.json({ objects, northOffset, direction: dirMeta.direction || "N" });
+    const bmPath = path.join(outputDir, "boundary_markers.json");
+    let boundaryMarkers = null;
+    if (fs.existsSync(bmPath)) {
+      try { boundaryMarkers = JSON.parse(fs.readFileSync(bmPath, "utf8")); } catch (_) {}
+    }
+    const objects = loadPhysicalSceneObjects(null, null, northOffset, boundaryMarkers);
+    res.json({ objects, northOffset, direction: dirMeta.direction || "N", boundaryMarkers });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -319,12 +342,11 @@ app.get("/api/scene/objects", (req, res) => {
 // ── 3D Mesh Enhancement & Artifact Purge Endpoint ─────────────────────
 app.post("/api/mesh/enhance", (req, res) => {
   try {
-    const uvPath = "/Users/mohammadmojijansari/.local/bin/uv";
-    const pythonCmd = fs.existsSync(uvPath) ? uvPath : "python3";
+    const pythonCmd = getPythonBin();
     const scriptPath = path.join(__dirname, "scripts", "enhance_mesh.py");
     const glbPath = path.join(__dirname, "frontend", "public", "models", "scene_textured.glb");
 
-    const py = spawn(pythonCmd, ["run", "--with", "scipy", "--with", "numpy", "--with", "pillow", "--with", "trimesh", "--with", "networkx", "python3", scriptPath, glbPath], {
+    const py = spawn(pythonCmd, [scriptPath, glbPath], {
       cwd: __dirname
     });
 
@@ -341,7 +363,7 @@ app.post("/api/mesh/enhance", (req, res) => {
       // Automatically detect room boundaries and regenerate navgrid + scene objects for the enhanced mesh
       const detectPath = path.join(__dirname, "scripts", "detect_scene_objects.py");
       if (fs.existsSync(detectPath)) {
-        spawn(pythonCmd, ["run", "--with", "pycolmap", "--with", "trimesh", "--with", "scipy", "python3", detectPath], { cwd: __dirname });
+        spawn(pythonCmd, [detectPath], { cwd: __dirname });
       }
 
       try {
@@ -384,25 +406,36 @@ app.post("/api/reconstruct", (req, res) => {
 
   res.json({ message: "Reconstruction started" });
 
-  const uvPath = "/Users/mohammadmojijansari/.local/bin/uv";
-  const pythonCmd = fs.existsSync(uvPath) ? uvPath : "python3";
-  const pythonArgs = fs.existsSync(uvPath)
-    ? ["run", "--with", "numpy", "--with", "pillow", "--with", "trimesh", "--with", "pycolmap", "python3", path.join(__dirname, "reconstruct.py")]
-    : [path.join(__dirname, "reconstruct.py")];
+  const pythonCmd = getPythonBin();
+  const scriptPath = fs.existsSync(path.join(__dirname, "reconstruct_dust3r.py"))
+    ? path.join(__dirname, "reconstruct_dust3r.py")
+    : path.join(__dirname, "reconstruct.py");
 
-  const python = spawn(pythonCmd, pythonArgs, {
+  const python = spawn(pythonCmd, [scriptPath], {
     cwd: __dirname,
   });
 
   const PHASES = [
-    { match: "feature_extractor", label: "Extracting features", progress: 10 },
-    { match: "exhaustive_matcher", label: "Matching features", progress: 20 },
-    { match: "mapper", label: "Sparse reconstruction (COLMAP)", progress: 35 },
-    { match: "image_undistorter", label: "Undistorting images", progress: 45 },
-    { match: "InterfaceCOLMAP", label: "Interfacing COLMAP → OpenMVS", progress: 55 },
-    { match: "DensifyPointCloud", label: "Densifying point cloud", progress: 68 },
-    { match: "ReconstructMesh", label: "Reconstructing mesh", progress: 80 },
-    { match: "TextureMesh", label: "Texturing mesh", progress: 90 },
+    // DUSt3R Neural Reconstruction Phases
+    { match: "[Device]", label: "Detecting hardware accelerator", progress: 5 },
+    { match: "[DUSt3R] Loading model", label: "Loading DUSt3R neural weights", progress: 15 },
+    { match: "[DUSt3R] Constructing image pairs", label: "Constructing image pairs", progress: 25 },
+    { match: "[DUSt3R] Running pairwise", label: "Predicting dense 3D pointmaps", progress: 40 },
+    { match: "[Global Alignment] Optimizing", label: "Global alignment & coordinate fusion", progress: 65 },
+    { match: "[Open3D] Initializing point cloud", label: "Open3D point cloud filtering", progress: 75 },
+    { match: "[Open3D] Running Poisson", label: "Poisson surface reconstruction", progress: 85 },
+    { match: "[Open3D] Transferring photographic", label: "Transferring photographic colors", progress: 92 },
+    { match: "[Export]", label: "Exporting textured GLB digital twin", progress: 98 },
+
+    // [LEGACY / UNVISITED - Shifted from COLMAP / OpenMVS to DUSt3R]
+    // { match: "feature_extractor", label: "Extracting features", progress: 10 },
+    // { match: "exhaustive_matcher", label: "Matching features", progress: 20 },
+    // { match: "mapper", label: "Sparse reconstruction (COLMAP)", progress: 35 },
+    // { match: "image_undistorter", label: "Undistorting images", progress: 45 },
+    // { match: "InterfaceCOLMAP", label: "Interfacing COLMAP → OpenMVS", progress: 55 },
+    // { match: "DensifyPointCloud", label: "Densifying point cloud", progress: 68 },
+    // { match: "ReconstructMesh", label: "Reconstructing mesh", progress: 80 },
+    // { match: "TextureMesh", label: "Texturing mesh", progress: 90 },
     { match: "enhance_mesh", label: "Predicting & smoothing room geometry", progress: 96 },
     { match: "DONE", label: "Done!", progress: 100 },
   ];
@@ -436,11 +469,11 @@ app.post("/api/reconstruct", (req, res) => {
       if (fs.existsSync(metaPath)) {
         try { dMeta = JSON.parse(fs.readFileSync(metaPath, "utf8")); } catch (_) {}
       }
-      const calibPy = spawn(pythonCmd, ["run", "--with", "pycolmap", "python3", scriptPath, dMeta.referenceImage || "", dMeta.direction || "N"], { cwd: __dirname });
+      const calibPy = spawn(pythonCmd, [scriptPath, dMeta.referenceImage || "", dMeta.direction || "N"], { cwd: __dirname });
       const detectPath = path.join(__dirname, "scripts", "detect_scene_objects.py");
       calibPy.on("close", () => {
         if (fs.existsSync(detectPath)) {
-          const detectPy = spawn(pythonCmd, ["run", "--with", "pycolmap", "--with", "trimesh", "--with", "scipy", "python3", detectPath], { cwd: __dirname });
+          const detectPy = spawn(pythonCmd, [detectPath], { cwd: __dirname });
           detectPy.on("close", () => {
             lastStatus = {
               phase: "complete",
@@ -485,12 +518,88 @@ app.post("/api/reset", (req, res) => {
   }
 });
 
+
+// ── Manual Room Orientation Flip Endpoint ────────────────────────────
+app.post("/api/flip-model", (req, res) => {
+  const pythonCmd = getPythonBin();
+  const scriptPath = path.join(__dirname, "flip_glb.py");
+
+  if (!fs.existsSync(scriptPath)) {
+    return res.status(500).json({ success: false, error: "flip_glb.py script not found" });
+  }
+
+  console.log(`[FlipModel] Running: ${pythonCmd} ${scriptPath}`);
+  const py = spawn(pythonCmd, [scriptPath], { cwd: __dirname });
+
+  let stderr = "";
+  py.stderr.on("data", (chunk) => {
+    stderr += chunk.toString();
+  });
+
+  py.on("close", (code) => {
+    if (code !== 0) {
+      console.error(`[FlipModel] Exited with code ${code}: ${stderr}`);
+      return res.status(500).json({ success: false, error: `flip_glb.py failed: ${stderr}` });
+    }
+
+    try {
+      const srcGlb = path.join(outputDir, "scene_textured.glb");
+      const pubGlb = path.join(__dirname, "frontend", "public", "models", "scene_textured.glb");
+      const distGlb = path.join(__dirname, "frontend", "dist", "models", "scene_textured.glb");
+
+      if (fs.existsSync(srcGlb)) {
+        fs.mkdirSync(path.dirname(pubGlb), { recursive: true });
+        fs.copyFileSync(srcGlb, pubGlb);
+        console.log(`[FlipModel] Copied flipped model to: ${pubGlb}`);
+
+        if (fs.existsSync(path.dirname(distGlb))) {
+          fs.copyFileSync(srcGlb, distGlb);
+          console.log(`[FlipModel] Copied flipped model to: ${distGlb}`);
+        }
+      }
+
+      const srcBounds = path.join(outputDir, "room_bounds.json");
+      const pubBounds = path.join(__dirname, "frontend", "public", "models", "room_bounds.json");
+      const distBounds = path.join(__dirname, "frontend", "dist", "models", "room_bounds.json");
+
+      if (fs.existsSync(srcBounds)) {
+        fs.copyFileSync(srcBounds, pubBounds);
+        console.log(`[FlipModel] Copied room bounds to: ${pubBounds}`);
+        if (fs.existsSync(path.dirname(distBounds))) {
+          fs.copyFileSync(srcBounds, distBounds);
+        }
+      }
+
+      return res.status(200).json({ success: true, message: "Model flipped successfully" });
+    } catch (copyErr) {
+      console.error("[FlipModel] Error copying flipped GLB:", copyErr);
+      return res.status(500).json({ success: false, error: copyErr.message });
+    }
+  });
+
+  py.on("error", (err) => {
+    console.error("[FlipModel] Spawn error:", err);
+    return res.status(500).json({ success: false, error: err.message });
+  });
+});
+
 // ── Forensic Crime Scene Recreation & Video Planning Endpoint ────────
 app.post("/api/recreation/plan", async (req, res) => {
   try {
-    const { prompt, apiKey, bounds, directionMeta } = req.body;
+    const { prompt, apiKey, bounds, directionMeta, boundaryMarkers } = req.body;
     if (!prompt || typeof prompt !== "string") {
       return res.status(400).json({ error: "Missing or invalid prompt string" });
+    }
+
+    // Persist incoming boundaryMarkers only if not already calibrated on disk
+    const bmFile = path.join(outputDir, "boundary_markers.json");
+    if (!fs.existsSync(bmFile) && boundaryMarkers && typeof boundaryMarkers === "object" && Object.keys(boundaryMarkers).length > 0) {
+      try {
+        fs.mkdirSync(outputDir, { recursive: true });
+        fs.writeFileSync(bmFile, JSON.stringify(boundaryMarkers, null, 2));
+      } catch (bmErr) {
+        console.warn("[server] Could not persist boundary_markers.json:", bmErr.message);
+      }
     }
 
     // Load saved direction metadata if none passed
@@ -507,11 +616,11 @@ app.post("/api/recreation/plan", async (req, res) => {
     // 1. Parse prompt into structured action script (Gemini or Rule-based)
     const { script, source } = await parseCrimeScript(prompt, apiKey);
 
-    // 2. Resolve 3D anchors given scene bounds and cardinal compass calibration
-    const { anchors, bounds: effectiveBounds, center, verificationReport, physicalObjects, northOffset } = resolveSceneAnchors(script, bounds, effectiveDirMeta);
+    // 2. Resolve 3D anchors given scene bounds, cardinal compass calibration, and physical boundary markers
+    const { anchors, bounds: effectiveBounds, center, verificationReport, physicalObjects, northOffset, boundaryMarkers: resolvedMarkers } = resolveSceneAnchors(script, bounds, effectiveDirMeta, null, boundaryMarkers);
 
     // 3. Generate kinematic simulation tracks, timed impacts, and captions
-    const plan = generateCrimePlan(script, anchors, effectiveBounds, center, null, verificationReport, physicalObjects);
+    const plan = generateCrimePlan(script, anchors, effectiveBounds, center, null, verificationReport, physicalObjects, resolvedMarkers);
 
     const result = {
       success: true,
@@ -522,6 +631,7 @@ app.post("/api/recreation/plan", async (req, res) => {
       plan,
       bounds: effectiveBounds,
       center,
+      boundaryMarkers: resolvedMarkers,
       verificationReport,
       physicalObjects,
       northOffset,

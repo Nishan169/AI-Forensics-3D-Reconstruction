@@ -698,6 +698,59 @@ html, body, #root {
   box-shadow: 0 4px 12px rgba(59, 107, 255, 0.4);
 }
 
+.btn-flip-quick {
+  border: 1px solid rgba(245, 158, 11, 0.6);
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.22), rgba(217, 119, 6, 0.16));
+  color: #fcd34d;
+  box-shadow: 0 2px 8px rgba(245, 158, 11, 0.25);
+}
+
+.btn-flip-quick:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.38), rgba(217, 119, 6, 0.28));
+  border-color: #fbbf24;
+  color: #ffffff;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.4);
+}
+
+.btn-flip-quick:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.btn-flip-sidebar {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px 14px;
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.18), rgba(217, 119, 6, 0.14));
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  border-radius: 8px;
+  color: #fcd34d;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-family: inherit;
+  margin-top: 6px;
+}
+
+.btn-flip-sidebar:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.32), rgba(217, 119, 6, 0.25));
+  border-color: #fbbf24;
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+.btn-flip-sidebar:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+
 .download-link {
   font-size: 11px;
   color: var(--text-muted);
@@ -906,6 +959,28 @@ html, body, #root {
   color: #94a3b8;
   border-color: rgba(148, 163, 184, 0.3);
   background: rgba(10, 11, 16, 0.78);
+}
+
+/* ── Dynamic Room Boundary Markers (.marker-badge) ─────────────────── */
+.marker-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 13px;
+  background: rgba(15, 23, 42, 0.92);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(148, 163, 184, 0.65);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  letter-spacing: 0.5px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  pointer-events: none;
+  user-select: none;
 }
 
 /* ── Upload icon small variant ─────────────────────────────────────── */
@@ -1521,6 +1596,83 @@ html, body, #root {
 .toggle-chip input {
   accent-color: var(--accent);
   cursor: pointer;
+}
+
+/* ── Dynamic Dummy Height Indicator & Stepper Badge ────────────── */
+.dummy-height-badge {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  background: rgba(30, 41, 59, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 6px;
+  font-size: 11px;
+  color: #cbd5e1;
+  user-select: none;
+}
+
+.dummy-badge-icon {
+  font-size: 12px;
+}
+
+.dummy-badge-text strong {
+  color: #38bdf8;
+  font-weight: 700;
+}
+
+.dummy-stepper {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 2px;
+}
+
+.stepper-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  background: rgba(51, 65, 85, 0.6);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 3px;
+  color: #f1f5f9;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.stepper-btn:hover {
+  background: rgba(14, 165, 233, 0.3);
+  border-color: #38bdf8;
+  color: #38bdf8;
+}
+
+.stepper-reset {
+  padding: 1px 4px;
+  height: 17px;
+  background: transparent;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 3px;
+  color: #94a3b8;
+  font-size: 9px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.stepper-reset.active {
+  background: rgba(16, 185, 129, 0.18);
+  border-color: rgba(16, 185, 129, 0.4);
+  color: #34d399;
+}
+
+.stepper-reset:hover {
+  border-color: #38bdf8;
+  color: #f1f5f9;
 }
 
 /* ── Video Record Button ───────────────────────────────────────────── */

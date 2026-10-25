@@ -1,4 +1,13 @@
 #!/usr/bin/env python3
+"""
+[LEGACY / UNVISITED DIAGNOSTIC SCRIPT - Early OpenMVS ASCII Map Inspector]
+========================================================================
+This script was an early diagnostic tool used to visualize 2D ASCII occupancy
+maps from the raw OpenMVS mesh. It has been replaced by the active NavGrid
+verification and detection engine in `scripts/detect_scene_objects.py`.
+"""
+
+"""
 import os
 import json
 import trimesh
@@ -91,3 +100,7 @@ if len(walk_x) > 0:
     min_walk_z = min_z + walk_z.min() * cell
     max_walk_z = min_z + walk_z.max() * cell
     print(f"\nWalkable Floor Extents: X=[{min_walk_x:.2f}, {max_walk_x:.2f}], Z=[{min_walk_z:.2f}, {max_walk_z:.2f}]")
+"""
+
+if __name__ == "__main__":
+    print("[inspect_room_map] Notice: Early diagnostic script, superseded by scripts/detect_scene_objects.py.")

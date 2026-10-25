@@ -144,14 +144,21 @@ export default function ForensicMannequin({
   actor,
   tracks = [],
   currentTime = 0,
-  showLabel = true
+  showLabel = true,
+  scale = 1.0,
+  roomHeight = 2.85
 }) {
   const rootRef = useRef();
   const labelRef = useRef(null);
   const partsRef = useRef(null);
 
+  // Dynamic scale calculation based on room height (baseline room ceiling = 2.85m)
+  const effectiveScale = scale !== undefined && scale !== null
+    ? scale
+    : Math.min(2.5, Math.max(0.4, (roomHeight || 2.85) / 2.85));
+
   // Material with actor's forensic color
-  const color = actor.color || (actor.role === "victim" ? "#06b6d4" : "#ef4444");
+  const color = actor?.color || (actor?.role === "victim" ? "#06b6d4" : "#ef4444");
   const mat = useMemo(() => {
     return new THREE.MeshStandardMaterial({
       color: new THREE.Color(color),
@@ -178,6 +185,7 @@ export default function ForensicMannequin({
 
     body = new THREE.Group();
     body.name = "__mannequin_body__";
+    body.scale.set(effectiveScale, effectiveScale, effectiveScale);
     root.add(body);
 
     const hips = new THREE.Group();
@@ -278,7 +286,14 @@ export default function ForensicMannequin({
     }
 
     partsRef.current = parts;
-  }, [mat, jointMat]);
+  }, [mat, jointMat, effectiveScale]);
+
+  // Update body scale dynamically whenever effectiveScale changes
+  useEffect(() => {
+    if (partsRef.current?.body) {
+      partsRef.current.body.scale.set(effectiveScale, effectiveScale, effectiveScale);
+    }
+  }, [effectiveScale]);
 
   // Reset joints to standard neutral standing T/A-pose
   const resetPose = (p) => {
@@ -309,6 +324,7 @@ export default function ForensicMannequin({
 
   // Kinematic solver executed every frame
   useFrame(() => {
+    if (!actor) return;
     const p = partsRef.current;
     if (!p) return;
 
@@ -334,7 +350,7 @@ export default function ForensicMannequin({
     p.root.position.x = lerp(s.from[0], s.to[0], u);
     p.root.position.z = lerp(s.from[1], s.to[1], u);
     const curFloorY = lerp(s.from_y ?? s.floor_y ?? 0.02, s.to_y ?? s.floor_y ?? 0.02, u);
-    p.root.position.y = Math.max(0.04, curFloorY);
+    p.root.position.y = Math.max(0.02, curFloorY);
 
     // Easing yaw orientation between segments
     let yaw = s.yaw;
@@ -636,7 +652,11 @@ export default function ForensicMannequin({
 
   const [currentSeg] = sampleTrack(currentTime);
   const isDown = currentSeg?.kind === "collapse" || currentSeg?.kind === "lie" || currentSeg?.kind === "sleep";
-  const labelHeight = isDown ? 0.45 : (currentSeg?.kind === "sit" ? 1.45 : 1.95);
+  const labelHeight = (isDown ? 0.45 : (currentSeg?.kind === "sit" ? 1.45 : 1.95)) * effectiveScale;
+
+  if (!actor) {
+    return <group ref={rootRef} />;
+  }
 
   return (
     <group ref={rootRef}>

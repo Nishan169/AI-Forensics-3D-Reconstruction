@@ -30,6 +30,9 @@ node_modules/
 # Frontend build
 frontend/dist/
 
+# Third-party neural models
+third_party/
+
 # IDE
 .vscode/
 .idea/

@@ -249,7 +249,8 @@ function DroppedWeaponMarker({ item, currentTime }) {
 /**
  * 3D Cardinal & Physical Room Anchor Visualizer (North Door, East Window, Chair, etc.)
  */
-export function SceneAnchorMarker({ name, anchor }) {
+export function SceneAnchorMarker({ name, anchor, dummyScale = 1.0 }) {
+  if (!anchor || !anchor.pos || !Array.isArray(anchor.pos) || anchor.pos.length < 2) return null;
   const isDoor = anchor.type === "door";
   const isWindow = anchor.type === "window";
   const isVerified = Boolean(anchor.verified);
@@ -269,10 +270,10 @@ export function SceneAnchorMarker({ name, anchor }) {
 
   return (
     <group position={[anchor.pos[0], anchor.y || 0.015, anchor.pos[1]]}>
-      {/* 3D Physical Chair Model */}
+      {/* 3D Physical Chair Model (dynamically scaled with dummy height) */}
       {isChair && (
-        <group rotation={[0, inwardAngle, 0]}>
-          {/* Seat Cushion (height 0.44m matches sitting mannequin hip height 0.52m) */}
+        <group rotation={[0, inwardAngle, 0]} scale={[dummyScale, dummyScale, dummyScale]}>
+          {/* Seat Cushion (height 0.44m matches sitting mannequin hip height 0.50m) */}
           <mesh position={[0, 0.44, 0]} castShadow>
             <boxGeometry args={[0.50, 0.07, 0.48]} />
             <meshStandardMaterial color="#78350f" roughness={0.65} metalness={0.1} />
@@ -292,9 +293,9 @@ export function SceneAnchorMarker({ name, anchor }) {
         </group>
       )}
 
-      {/* 3D Physical Central Table Model (obstacle in middle of room) */}
+      {/* 3D Physical Central Table Model (dynamically scaled with dummy height) */}
       {isTable && (
-        <group rotation={[0, inwardAngle, 0]}>
+        <group rotation={[0, inwardAngle, 0]} scale={[dummyScale, dummyScale, dummyScale]}>
           {/* Table Top Surface */}
           <mesh position={[0, 0.50, 0]} castShadow>
             <boxGeometry args={[1.60, 0.06, 1.10]} />
@@ -317,14 +318,14 @@ export function SceneAnchorMarker({ name, anchor }) {
 
       {/* Ground Ring */}
       <mesh rotation={[-Math.PI / 2, 0, 0]}>
-        <ringGeometry args={[0.22, 0.32, 32]} />
+        <ringGeometry args={[0.22 * Math.min(1.2, dummyScale), 0.32 * Math.min(1.2, dummyScale), 32]} />
         <meshBasicMaterial color={color} side={THREE.DoubleSide} transparent opacity={isVerified ? 0.85 : 0.6} />
       </mesh>
 
       {/* Verified inner beacon */}
       {isVerified && (
         <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.002, 0]}>
-          <circleGeometry args={[0.09, 16]} />
+          <circleGeometry args={[0.09 * Math.min(1.2, dummyScale), 16]} />
           <meshBasicMaterial color={color} side={THREE.DoubleSide} transparent opacity={0.9} />
         </mesh>
       )}
@@ -408,9 +409,18 @@ export default function ForensicSimulation({
   showLabels = true,
   showAnchors = false,
   center = [0, 0, 0],
-  radius = 5
+  radius = 5,
+  roomHeight = null,
+  roomSize = null,
+  dummyScale = null
 }) {
   const { camera } = useThree();
+
+  // Dynamic dummy and room proportion calculations (baseline room ceiling = 2.85m)
+  const effectiveRoomHeight = roomHeight || roomSize?.[1] || plan?.roomHeight || 2.85;
+  const effectiveDummyScale = dummyScale !== null && dummyScale !== undefined
+    ? dummyScale
+    : (plan?.dummyScale || THREE.MathUtils.clamp(effectiveRoomHeight / 2.85, 0.45, 2.5));
 
   // Find perpetrator and victim IDs
   const perpId = useMemo(() => {
@@ -526,17 +536,17 @@ export default function ForensicSimulation({
     if (cameraMode === "follow_killer" && perpId) {
       const p = getActorCurrentPos(perpId);
       if (p) {
-        const targetCamX = p.x - Math.sin(p.yaw) * 2.3;
-        const targetCamZ = p.z - Math.cos(p.yaw) * 2.3;
-        camera.position.lerp(new THREE.Vector3(targetCamX, 1.8, targetCamZ), 0.1);
-        controls.target.lerp(new THREE.Vector3(p.x, 1.15, p.z), 0.15);
+        const targetCamX = p.x - Math.sin(p.yaw) * 2.3 * effectiveDummyScale;
+        const targetCamZ = p.z - Math.cos(p.yaw) * 2.3 * effectiveDummyScale;
+        camera.position.lerp(new THREE.Vector3(targetCamX, 1.8 * effectiveDummyScale, targetCamZ), 0.1);
+        controls.target.lerp(new THREE.Vector3(p.x, 1.15 * effectiveDummyScale, p.z), 0.15);
       }
 
     } else if (cameraMode === "follow_victim" && victimId) {
       const v = getActorCurrentPos(victimId);
       if (v) {
-        camera.position.lerp(new THREE.Vector3(v.x + 1.8, 1.7, v.z + 1.8), 0.08);
-        controls.target.lerp(new THREE.Vector3(v.x, 0.9, v.z), 0.12);
+        camera.position.lerp(new THREE.Vector3(v.x + 1.8 * effectiveDummyScale, 1.7 * effectiveDummyScale, v.z + 1.8 * effectiveDummyScale), 0.08);
+        controls.target.lerp(new THREE.Vector3(v.x, 0.9 * effectiveDummyScale, v.z), 0.12);
       }
 
     } else if (cameraMode === "surveillance") {
@@ -556,14 +566,14 @@ export default function ForensicSimulation({
 
       if (nearImpact && v) {
         // Dramatic close shot on victim & attack
-        camera.position.lerp(new THREE.Vector3(v.x + 1.4, 1.4, v.z + 1.4), 0.12);
-        controls.target.lerp(new THREE.Vector3(v.x, 1.0, v.z), 0.15);
+        camera.position.lerp(new THREE.Vector3(v.x + 1.4 * effectiveDummyScale, 1.4 * effectiveDummyScale, v.z + 1.4 * effectiveDummyScale), 0.12);
+        controls.target.lerp(new THREE.Vector3(v.x, 1.0 * effectiveDummyScale, v.z), 0.15);
       } else if (p) {
         // Dynamic medium tracking shot
-        const camX = p.x - Math.sin(p.yaw + 0.5) * 2.5;
-        const camZ = p.z - Math.cos(p.yaw + 0.5) * 2.5;
-        camera.position.lerp(new THREE.Vector3(camX, 1.9, camZ), 0.08);
-        controls.target.lerp(new THREE.Vector3(p.x, 1.1, p.z), 0.12);
+        const camX = p.x - Math.sin(p.yaw + 0.5) * 2.5 * effectiveDummyScale;
+        const camZ = p.z - Math.cos(p.yaw + 0.5) * 2.5 * effectiveDummyScale;
+        camera.position.lerp(new THREE.Vector3(camX, 1.9 * effectiveDummyScale, camZ), 0.08);
+        controls.target.lerp(new THREE.Vector3(p.x, 1.1 * effectiveDummyScale, p.z), 0.12);
       }
     }
   });
@@ -573,7 +583,7 @@ export default function ForensicSimulation({
       <group>
         {showAnchors &&
           displayAnchors.map((anc) => (
-            <SceneAnchorMarker key={anc.name} name={anc.name} anchor={anc} />
+            <SceneAnchorMarker key={anc.name} name={anc.name} anchor={anc} dummyScale={effectiveDummyScale} />
           ))}
       </group>
     );
@@ -581,7 +591,7 @@ export default function ForensicSimulation({
 
   return (
     <group>
-      {/* 1. Mannequins for all actors */}
+      {/* 1. Mannequins for all actors dynamically scaled to room ceiling height */}
       {Object.entries(plan.actors || {}).map(([id, actor]) => (
         <ForensicMannequin
           key={id}
@@ -589,6 +599,8 @@ export default function ForensicSimulation({
           tracks={plan.tracks?.[id] || []}
           currentTime={currentTime}
           showLabel={showLabels}
+          scale={effectiveDummyScale}
+          roomHeight={effectiveRoomHeight}
         />
       ))}
 
@@ -608,7 +620,7 @@ export default function ForensicSimulation({
       {/* 4. Cardinal Anchor Markers */}
       {showAnchors &&
         displayAnchors.map((anc) => (
-          <SceneAnchorMarker key={anc.name} name={anc.name} anchor={anc} />
+          <SceneAnchorMarker key={anc.name} name={anc.name} anchor={anc} dummyScale={effectiveDummyScale} />
         ))}
 
       {/* 5. Firearm Ballistic Tracers & Muzzle Flashes */}
