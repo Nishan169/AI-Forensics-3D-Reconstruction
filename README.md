@@ -1,6 +1,6 @@
 # 🏛️ AI Forensics & 3D Crime Scene Reconstruction
 
-An end-to-end, AI-powered forensic spatial analysis platform. This system reconstructs textured 3D crime scene rooms from multi-view photographs, reenacts dynamic criminal incidents with animated 3D human mannequins and obstacle-avoiding navigation, and performs open-vocabulary weapon and bloodstain threat probability detection.
+An end-to-end, AI-powered forensic spatial analysis platform. This system reconstructs textured 3D digital twins of physical crime scenes from multi-view photographs using **DUSt3R neural 3D reconstruction**, reenacts dynamic criminal incidents with animated 3D human mannequins and obstacle-avoiding navigation, and performs open-vocabulary weapon and bloodstain threat probability detection.
 
 ---
 
@@ -13,14 +13,14 @@ An end-to-end, AI-powered forensic spatial analysis platform. This system recons
   - [1. Clone Repository](#1-clone-repository)
   - [2. Install Node.js Dependencies](#2-install-nodejs-dependencies)
   - [3. Install Threat Detection Python Backend](#3-install-threat-detection-python-backend)
-  - [4. Install 3D Reconstruction Python Packages (Optional)](#4-install-3d-reconstruction-python-packages-optional)
+  - [4. Install 3D Reconstruction Python Packages](#4-install-3d-reconstruction-python-packages)
 - [🚀 How to Run](#-how-to-run)
   - [Option A: Standard 2-Terminal Run (Recommended)](#option-a-standard-2-terminal-run-recommended)
   - [Option B: Explicit 3-Terminal Run](#option-b-explicit-3-terminal-run)
 - [🧭 Module Walkthrough & Usage](#-module-walkthrough--usage)
-  - [1. 🏢 3D Photogrammetry Room](#1--3d-photogrammetry-room)
+  - [1. 🏢 3D Digital Twin Reconstruction](#1--3d-digital-twin-reconstruction)
   - [2. 🎬 Crime Recreation Studio](#2--crime-recreation-studio)
-  - [3. 🔬 Threat & Weapon Detection (FORENSIQ)](#3--threat--weapon-detection-forensiq)
+  - [3. 🔬 Threat & Evidence Analysis (FORENSIQ)](#3--threat--evidence-analysis-forensiq)
 - [📡 API Endpoints Overview](#-api-endpoints-overview)
 - [🛠️ Troubleshooting & Tips](#️-troubleshooting--tips)
 
@@ -28,18 +28,25 @@ An end-to-end, AI-powered forensic spatial analysis platform. This system recons
 
 ## ✨ Key Features
 
-1. **🏢 3D Photogrammetry Room Reconstruction**:
-   - Extracts camera features and sparse point clouds using **COLMAP**.
-   - Generates high-density Poisson surface meshes and textured `.glb` models using **OpenMVS**.
-   - Predicts and smooths room geometry, automatically inpainting voids and cleaning floating shards.
-   - Cleans up stale models automatically on browser refresh or new image uploads.
+1. **🏢 Neural 3D Digital Twin Reconstruction**:
+   - **DUSt3R Neural Reconstruction**: Predicts dense 3D pointmaps and confidence weights directly from unconstrained, uncalibrated photographs without fragile SfM feature matching.
+   - **Global Coordinate Fusion & Alignment**: Optimizes camera poses and point clouds via Minimum Spanning Tree (MST) and gradient descent alignment.
+   - **Open3D Surface Meshing & Color Transfer**: Generates watertight surfaces with Poisson Surface Reconstruction and transfers photographic color maps.
+   - **Local Floor Plane Fitting & Leveling**: Automatically estimates floor slope, levels geometry to Three.js canonical +Y-up orientation, and centers the room at origin.
+   - **Automated Lifecycle & 1-Click Orientation Flip**: Cleans stale models upon new photo uploads and supports instant 180° room orientation flipping (`/api/flip-model`).
 
 2. **🎬 Crime Incident Reenactment Studio**:
-   - **Gemini AI / Heuristic Incident Planner**: Translates crime descriptions into structured sequential actions (e.g., _"Killer entered from North-West door, moved towards the victim sitting on the couch, attacked, and fled towards the South door"_).
-   - **Dynamic 3D Mannequins**: Human avatars dynamically adjust postures (standing, sitting, prone/fallen) and orientations based on statements.
-   - **Obstacle-Aware Pathfinding**: Navigation grid calculates collision-free walking paths around furniture and room obstacles.
-   - **Cardinal Compass Calibration**: 8-direction alignment (N, NE, E, SE, S, SW, W, NW) ensures room coordinates match physical walls and corners.
-   - **Interactive Playback**: 60 FPS timeline scrubber, speed multiplier ($0.5\times$ to $4\times$), multi-angle camera tracking (Director, Tactical Overhead, Orbit, Follow Target), and video recording.
+   - **Gemini AI & Rule-Based Incident Planner**: Converts natural language statements (e.g. _"The killer entered through the north door, approached the victim sitting on the couch, attacked, and fled via the east door"_) into chronologically staged simulation events.
+   - **Proportional 3D Forensic Mannequins**: Dummy heights scale dynamically to match room ceiling height, executing natural postures (standing, sitting, fallen/prone).
+   - **Obstacle-Avoiding 3D Navigation Grid (A\*)**:
+     - Strict step-height rejection ($\le 12\text{cm}$) and smooth elevation penalties prevent dummies from stepping on furniture or elevated curbs.
+     - Radius-aware Line-of-Sight (LOS) corridor clearance maintains safe clearance around furniture corners.
+     - Physical object stamping marks tables, sofas, chairs, and beds onto the occupancy grid.
+     - Natural standoff positioning: Attackers reach close contact distance ($0.38\text{m}\text{--}0.55\text{m}$) on walkable floor space without clipping objects.
+     - Placement freedom: Victims can be seated or positioned directly on furniture without deflection.
+     - Impenetrable perimeter floor bounds prevent dummies from stepping outside walls.
+   - **8-Cardinal Compass & Wall Calibration**: Calibrates cardinal directions (N, NE, E, SE, S, SW, W, NW) and doorway portals to match physical room walls.
+   - **Interactive Playback**: 60 FPS timeline scrubber, variable playback speed ($0.5\times$ to $4\times$), multi-angle camera modes (Director, Tactical 2D Overhead, Orbit, Follow Target), and video recording.
 
 3. **🔬 AI Weapon & Threat Probability Detection (`FORENSIQ`)**:
    - **Open-Vocabulary YOLO-World**: Detects potential weapons (knives, firearms, blunt objects) and distinguishes them from everyday room objects.
@@ -54,53 +61,53 @@ An end-to-end, AI-powered forensic spatial analysis platform. This system recons
 ```mermaid
 flowchart TD
     subgraph UI ["Frontend (Vite + React + Three.js) - Port 5173"]
-        A[3D Photogrammetry Room]
-        B[Crime Recreation Studio]
-        C[Threat & Weapon Detection Tab]
+        A["3D Digital Twin Viewer"]
+        B["Crime Recreation Studio"]
+        C["Threat & Evidence Analysis Tab"]
     end
 
     subgraph NodeServer ["Backend Server (Express) - Port 3001"]
-        D[/api/upload & /api/reconstruct]
-        E[/api/recreation/plan]
-        F[/api/direction & /api/scene/objects]
-        G[/api/analyze proxy]
-        H[/api/reset cleanup]
+        D["/api/upload & /api/reconstruct"]
+        E["/api/recreation/plan"]
+        F["/api/direction & /api/scene/objects"]
+        G["/api/flip-model"]
+        H["/api/analyze proxy"]
+        I["/api/reset cleanup"]
     end
 
     subgraph ThreatAPI ["Threat Detection Service (FastAPI) - Port 8000"]
-        I[YOLOv8-World Detector]
-        J[Bloodstain Geometry Analyzer]
-        K[Bayesian Weapon Scoring]
+        J["YOLOv8-World Detector"]
+        K["Bloodstain Geometry Analyzer"]
+        L["Bayesian Weapon Scoring"]
     end
 
-    subgraph Reconstruction ["3D Pipeline (Python & Binaries)"]
-        L[COLMAP SfM]
-        M[OpenMVS Mesh & Texture]
-        N[enhance_mesh.py]
+    subgraph Reconstruction ["3D Neural Pipeline (Python)"]
+        M["reconstruct_dust3r.py (DUSt3R Neural Model)"]
+        N["Global Pointmap Alignment & Fusion"]
+        O["Open3D Poisson Meshing & Texture Transfer"]
+        P["detect_scene_objects.py (NavGrid & Wall Calibration)"]
     end
 
-    A -->|Upload Photos| D
-    D -->|Executes| L --> M --> N
-    B -->|Crime Statement| E
-    C -->|Images| G -->|Forwards to 8000| ThreatAPI
-    NodeServer -->|Auto-spawns if inactive| ThreatAPI
+    A -->|"Upload Photos"| D
+    D -->|"Executes"| M --> N --> O --> P
+    B -->|"Crime Statement"| E
+    C -->|"Evidence Photos"| H -->|"Forwards to 8000"| ThreatAPI
+    NodeServer -->|"Auto-spawns if inactive"| ThreatAPI
 ```
 
 ---
 
 ## ⚙️ Prerequisites
 
-Before getting started, make sure you have the following installed on your system:
-
-| Tool                              | Recommended Version              | Purpose                                                                   |
-| --------------------------------- | -------------------------------- | ------------------------------------------------------------------------- |
-| **Node.js**                       | `v18.x` or `v20.x`+ (with `npm`) | Runs Express backend and React frontend                                   |
-| **Python**                        | `3.10` – `3.14`                  | Powers threat detector and 3D processing scripts                          |
-| **Git**                           | `2.x`+                           | Version control                                                           |
-| **COLMAP & OpenMVS** _(Optional)_ | Latest                           | Required **only** if generating new photogrammetry 3D meshes from scratch |
+| Tool | Recommended Version | Purpose |
+| --- | --- | --- |
+| **Node.js** | `v18.x` or `v20.x`+ (with `npm`) | Runs Express backend and React frontend client |
+| **Python** | `3.10` – `3.12` | Powers DUSt3R neural reconstruction and threat detection |
+| **PyTorch** | `>= 2.1.0` | Powers neural pointmap inference (CUDA, Apple MPS, or CPU) |
+| **Git** | `2.x`+ | Version control |
 
 > [!NOTE]
-> **No COLMAP/OpenMVS?** You can still run the **Crime Recreation Studio** (with spatial room wireframe fallback & dummies) and the **AI Threat & Weapon Detection** tab out of the box!
+> **No external COLMAP or OpenMVS binaries required!** The entire 3D pipeline runs natively in Python using PyTorch, DUSt3R, and Open3D.
 
 ---
 
@@ -115,7 +122,7 @@ cd AI-Forensics-3D-Reconstruction
 
 ### 2. Install Node.js Dependencies
 
-Install dependencies for the root backend server:
+Install dependencies for the root orchestration server:
 
 ```bash
 npm install
@@ -129,40 +136,47 @@ npm install --prefix frontend
 
 ### 3. Install Threat Detection Python Backend
 
-The Threat Detection service runs as an isolated FastAPI microservice.
+The Threat Detection service runs as an isolated FastAPI microservice:
 
 ```bash
-# Navigate to threat_backend
 cd threat_backend
-
-# Create virtual environment
 python3 -m venv venv
 
-# Activate virtual environment
 # macOS / Linux:
 source venv/bin/activate
 # Windows (PowerShell):
 # .\venv\Scripts\Activate.ps1
 
-# Install required Python packages
 pip install --upgrade pip
 pip install -r requirements.txt
-
-# Return to root directory
 cd ..
 ```
 
 _(Pre-trained YOLO weights `yolov8m-worldv2.pt` and `yolov8m.pt` are included in `threat_backend/` and will download automatically if missing)._
 
-### 4. Install 3D Reconstruction Python Packages (Optional)
+### 4. Install 3D Reconstruction Python Packages
 
-If you intend to run full photogrammetry reconstruction locally from uploaded photos:
+Set up a virtual environment in the project root for the 3D reconstruction and forensic navigation pipeline:
 
 ```bash
+python3 -m venv venv
+
+# macOS / Linux:
+source venv/bin/activate
+# Windows (PowerShell):
+# .\venv\Scripts\Activate.ps1
+
+pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-_(Optional: Install `uv` via `brew install uv` or `pip install uv` for accelerated python script executions)._
+#### Hardware Accelerator Options:
+- **Apple Silicon (M1/M2/M3/M4 / MPS)**: Supported out of the box with `torch` and `torchvision`.
+- **NVIDIA GPU (CUDA 12.1)**:
+  ```bash
+  pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+  ```
+- **CPU Fallback**: DUSt3R and Open3D automatically run in CPU mode if no GPU is available.
 
 ---
 
@@ -170,10 +184,10 @@ _(Optional: Install `uv` via `brew install uv` or `pip install uv` for accelerat
 
 ### Option A: Standard 2-Terminal Run (Recommended)
 
-`server.js` automatically detects if the Python Threat Detection service is active; if not, it automatically spawns it in the background!
+`server.js` automatically checks if the Python Threat Detection service is active; if not, it automatically spawns it in the background!
 
 ```bash
-# Terminal 1: Start Backend Server (Port 3001)
+# Terminal 1: Start Backend Orchestration Server (Port 3001)
 node server.js
 ```
 
@@ -187,8 +201,6 @@ Now open **http://localhost:5173** in your web browser.
 ---
 
 ### Option B: Explicit 3-Terminal Run
-
-If you prefer running and monitoring each microservice in its own terminal window:
 
 ```bash
 # Terminal 1: Threat Detection Backend (Port 8000)
@@ -209,27 +221,29 @@ npm run frontend
 
 ## 🧭 Module Walkthrough & Usage
 
-### 1. 🏢 3D Photogrammetry Room
+### 1. 🏢 3D Digital Twin Reconstruction
 
 1. In the left sidebar, click the **Scene Photos** dropzone and select or drag & drop multiple overlapping room photos (JPG/PNG).
 2. Click **Generate 3D Room**.
-3. Watch the real-time progress bar and log stream through feature extraction, dense matching, mesh reconstruction, and texture packing.
-4. Orbit, pan, and zoom around the textured 3D model using mouse controls.
-5. Use **🎯 Face North** or click compass directions to orient the room.
+3. Watch the real-time progress bar stream through neural pointmap inference, global coordinate alignment, Poisson surface reconstruction, and photographic color baking.
+4. Orbit, pan, and zoom around the textured 3D digital twin using mouse controls.
+5. Click **🎯 Face North** or click direction pills to align the room coordinates with physical room walls.
+6. If the model orientation requires vertical inversion, click **🔄 Flip Orientation**.
 
 ### 2. 🎬 Crime Recreation Studio
 
 1. Click the **🎬 Crime Recreation Studio** tab at the top.
-2. In the text area, type a natural language description of the incident:
-   > _"The killer entered through the north door, walked to the south couch where the victim was sitting, attacked the victim, and escaped via the west door."_
-3. _(Optional)_ Provide your **Gemini API Key** in the settings field to enable advanced natural language parsing (a deterministic heuristic engine is used if omitted).
+2. In the prompt area, enter a natural language incident description:
+   > _"The killer entered through the north door, walked to the victim sitting on the chair near the central living room table, shot the victim with a gun, and escaped via the north door."_
+3. _(Optional)_ Provide your **Gemini API Key** in settings for advanced LLM prompt parsing (a deterministic heuristic engine is used if omitted).
 4. Click **Generate 3D Reenactment Plan**.
-5. Use the playback controls to **Play / Pause**, scrub the timeline, adjust simulation speed ($0.5\times$ to $4\times$), toggle movement paths, and switch camera perspectives (Director, Tactical 2D Overhead, First-Person).
+5. Dummies simulate the exact incident timeline with collision-free paths around all furniture.
+6. Use playback controls to **Play / Pause**, scrub the timeline, adjust speed ($0.5\times$ to $4\times$), toggle path lines, and switch perspectives (Director, Tactical Overhead, Orbit, Follow Target).
 
-### 3. 🔬 Threat & Weapon Detection (FORENSIQ)
+### 3. 🔬 Threat & Evidence Analysis (FORENSIQ)
 
-1. Click the **🔬 Threat & Evidence Analysis** tab at the top (or click **Weapon & Threat Detection Tab →** from the sidebar).
-2. Drag & drop or browse photos of interest directly into the upload area.
+1. Click the **🔬 Threat & Evidence Analysis** tab at the top.
+2. Drag & drop or browse evidence photos of interest directly into the upload area.
 3. The system instantly detects objects using open-vocabulary YOLO-World, highlights blood spatters and transfer pools, and calculates weapon probabilities.
 4. Toggle between **Focused View** (single photo with interactive evidence inspection) and **View All (Stacked)**.
 5. Hover over any weapon row in the sidebar to trace proximity lines to nearby bloodstains on the canvas.
@@ -241,21 +255,32 @@ npm run frontend
 
 ### Orchestration Server (`http://localhost:3001`)
 
-| Method | Endpoint                   | Description                                                      |
-| ------ | -------------------------- | ---------------------------------------------------------------- |
-| `POST` | `/api/upload`              | Uploads scene photos for 3D reconstruction                       |
-| `POST` | `/api/reconstruct`         | Triggers the COLMAP + OpenMVS pipeline                           |
-| `GET`  | `/api/status`              | Server-Sent Events (SSE) streaming real-time reconstruction logs |
-| `GET`  | `/api/direction`           | Returns calibrated cardinal compass angles                       |
-| `POST` | `/api/direction/calibrate` | Updates compass orientation with respect to physical room walls  |
-| `GET`  | `/api/scene/objects`       | Loads detected room objects and 8-direction anchors              |
-| `POST` | `/api/recreation/plan`     | Generates structured incident timeline and dummy animation paths |
-| `POST` | `/api/reset`               | Purges all prior models, textures, and COLMAP artifacts          |
-| `POST` | `/api/analyze`             | Proxies image analysis requests to Threat Detection backend      |
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| `POST` | `/api/upload` | Uploads scene photos and reference camera for 3D reconstruction |
+| `POST` | `/api/reconstruct` | Triggers the DUSt3R neural 3D reconstruction pipeline |
+| `GET` | `/api/status` | Server-Sent Events (SSE) streaming real-time reconstruction logs |
+| `GET` | `/api/direction` | Returns calibrated cardinal compass angles and camera azimuth |
+| `POST` | `/api/direction/calibrate` | Updates compass orientation with respect to physical room walls |
+| `GET` | `/api/scene/objects` | Loads detected room objects, local floor elevation, and boundary markers |
+| `POST` | `/api/recreation/plan` | Generates structured incident timeline and obstacle-avoiding simulation tracks |
+| `POST` | `/api/flip-model` | Flips vertical room orientation and copies updated assets to frontend |
+| `POST` | `/api/reset` | Purges prior models, textures, and reconstruction artifacts |
+| `POST` | `/api/analyze` | Proxies image analysis requests to Threat Detection backend |
 
 ### Threat Detection Service (`http://127.0.0.1:8000`)
 
-| Method | Endpoint       | Description                                                                     |
-| ------ | -------------- | ------------------------------------------------------------------------------- |
-| `GET`  | `/api/health`  | Service liveness health check                                                   |
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| `GET` | `/api/health` | Service liveness health check |
 | `POST` | `/api/analyze` | Processes image, returns bounding boxes, blood polygons, and probability scores |
+| `POST` | `/api/analyze-batch` | Processes multiple images concurrently |
+
+---
+
+## 🛠️ Troubleshooting & Tips
+
+- **Reconstruction Speed**: On Apple Silicon (M-series) or NVIDIA GPUs, DUSt3R completes reconstruction in ~1–3 minutes. On CPU-only machines, use 6–12 photos for optimal performance.
+- **Dummies Clipping Objects**: The navigation engine automatically fits local floor planes and stamps furniture footprints. Ensure `output/navgrid.json` and `output/scene_objects.json` exist; click **Regenerate Plan** to refresh collision geometry.
+- **Model Orientation**: If the room appears inverted, click **🔄 Flip Orientation** in the sidebar. This flips the Y-axis canonically and updates all room bounds automatically.
+- **Gemini Incident Planning**: For statements with custom names or complex choreography, entering a free Google Gemini API key provides high-precision semantic parsing.
