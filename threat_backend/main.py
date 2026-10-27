@@ -102,6 +102,8 @@ def _decode_image(data: bytes) -> np.ndarray:
 
 def _polygon_to_list(polygon: np.ndarray) -> list[list[int]]:
     """Convert an OpenCV contour array to a JSON-serialisable list of [x, y] pairs."""
+    if polygon is None or len(polygon) == 0:
+        return []
     return polygon.reshape(-1, 2).tolist()
 
 

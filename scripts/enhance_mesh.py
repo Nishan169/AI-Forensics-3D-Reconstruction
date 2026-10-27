@@ -325,6 +325,44 @@ def enhance_scene_mesh(glb_path, out_glb_path=None,
     for g in geoms:
         g.apply_transform(T_total)
 
+    # ── Update camera_poses.json with exact same T_total transform ──────────
+    poses_path = root / "output" / "camera_poses.json"
+    if poses_path.exists():
+        try:
+            with open(poses_path, "r", encoding="utf-8") as pf:
+                poses = json.load(pf)
+            col_norms = np.linalg.norm(T_total[:3, :3], axis=0)
+            s_val = float(np.mean(col_norms))
+            R_rot = T_total[:3, :3] / s_val if s_val > 1e-6 else np.eye(3)
+            # Ensure R_rot is orthonormal
+            U, _, Vt = np.linalg.svd(R_rot)
+            R_rot = U @ Vt
+
+            new_poses = {}
+            for k, p in poses.items():
+                p_mat = np.array(p, dtype=np.float64)
+                if p_mat.shape == (4, 4) or (p_mat.shape[0] == 3 and p_mat.shape[1] == 4):
+                    R_cam = p_mat[:3, :3]
+                    t_cam = p_mat[:3, 3]
+                    new_R = R_rot @ R_cam
+                    new_t = T_total[:3, :3] @ t_cam + T_total[:3, 3]
+                    p_new = np.eye(4, dtype=np.float64)
+                    p_new[:3, :3] = new_R
+                    p_new[:3, 3] = new_t
+                    new_poses[k] = p_new.tolist()
+                else:
+                    new_poses[k] = p
+
+            with open(poses_path, "w", encoding="utf-8") as pf:
+                json.dump(new_poses, pf, indent=2)
+            print(f"[enhance_mesh]   Synchronized {len(new_poses)} camera pose(s) with canonical mesh transform in {poses_path.name}", flush=True)
+
+            for d in [root / "frontend" / "public" / "models", root / "frontend" / "dist" / "models"]:
+                if d.exists():
+                    shutil.copy2(poses_path, d / "camera_poses.json")
+        except Exception as pe:
+            print(f"[enhance_mesh]   Notice updating camera poses: {pe}", flush=True)
+
     # ── 4. Export & Deploy ───────────────────────────────────────────────────
     # Compute final bounds for reporting
     v_final = np.vstack([g.vertices for g in geoms])
@@ -344,9 +382,10 @@ def enhance_scene_mesh(glb_path, out_glb_path=None,
     with open(out_glb_path, "wb") as fh:
         fh.write(out_bytes)
 
-    # Mirror to frontend public, dist, and openmvs output
+    # Mirror to frontend public, dist, output, and openmvs
     for dest_dir in [root / "frontend" / "public" / "models",
                      root / "frontend" / "dist"   / "models",
+                     root / "output",
                      root / "output"   / "openmvs"]:
         if dest_dir.exists():
             dest = dest_dir / "scene_textured.glb"

@@ -1,18 +1,4 @@
 #!/usr/bin/env python3
-"""
-[DEPRECATED / UNVISITED SCRIPT - Shifted from COLMAP to DUSt3R]
-=============================================================
-This script was an early standalone test for running the traditional COLMAP
-Structure-from-Motion CLI (feature_extractor, exhaustive_matcher, mapper).
-
-The project has transitioned completely to DUSt3R neural 3D reconstruction
-(see `reconstruct_dust3r.py`), which generates dense 3D pointmaps and digital
-twins directly without requiring local COLMAP installations or GPU CUDA SIFT.
-
-This file is preserved commented out below for archival reference only.
-"""
-
-"""
 import subprocess
 from pathlib import Path
 import shutil
@@ -116,7 +102,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-"""
-
-if __name__ == "__main__":
-    print("[run_colmap] Notice: COLMAP pipeline has been deprecated and replaced by reconstruct_dust3r.py.")

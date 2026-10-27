@@ -289,7 +289,7 @@ export default function ThreatDetectionTab({
                 {
                   icon: "🩸",
                   title: "Bloodstain Geometry",
-                  desc: "Dual-threshold segmentation maps impact spatters and blood pools with contour polygons.",
+                  desc: "Forensic color segmentation analyzes potential impact spatters and blood pools for spatial weapon proximity.",
                 },
                 {
                   icon: "📊",

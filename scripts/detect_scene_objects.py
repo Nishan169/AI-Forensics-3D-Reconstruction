@@ -18,6 +18,8 @@ import sys
 import json
 import math
 import base64
+import shutil
+import itertools
 import numpy as np
 
 CARDINAL_SECTORS = [
@@ -31,125 +33,201 @@ CARDINAL_SECTORS = [
     {"code": "NW", "label": "North-West", "angle": 315},
 ]
 
-def compute_boundary_markers(vertices, north_offset=0.0):
-    if len(vertices) < 10:
+def compute_boundary_markers(vertices, normals=None, north_offset=0.0):
+    if vertices is None or len(vertices) < 10:
         return None
     v = np.array(vertices, dtype=np.float64)
     floor_y = float(np.percentile(v[:, 1], 2.5))
-    y_coord = round(floor_y + 0.35, 3)
+    if abs(floor_y) < 0.45:
+        y_coord = 0.35
+    else:
+        y_coord = round(floor_y + 0.35, 3)
+    p5_y, p95_y = np.percentile(v[:, 1], [5, 95])
 
-    # 1. Detect physical walls using vertical wall surface histogram
-    wall_v = v[(v[:, 1] >= floor_y + 0.40) & (v[:, 1] <= floor_y + 1.80)]
-    if len(wall_v) >= 200:
-        x_bins = np.arange(-4.5, 4.5, 0.05)
-        hist_x, _ = np.histogram(wall_v[:, 0], bins=x_bins)
-        # East wall: peak with X < -2.2
-        east_mask = (x_bins[:-1] < -2.2) & (hist_x >= 200)
-        wall_east_x = round(float(x_bins[:-1][east_mask][np.argmax(hist_x[east_mask])] + 0.025), 3) if np.any(east_mask) else -3.425
+    # Extract floor and near-floor surface points to obtain true architectural perimeter
+    flr_mask = v[:, 1] < p5_y + 0.35
+    flr_pts = v[flr_mask]
+    if len(flr_pts) < 100:
+        flr_pts = v
 
-        # West wall: peak with X in [0.7, 1.6]
-        west_mask = (x_bins[:-1] > 0.7) & (x_bins[:-1] < 1.6) & (hist_x >= 200)
-        wall_west_x = round(float(x_bins[:-1][west_mask][np.argmax(hist_x[west_mask])] + 0.025), 3) if np.any(west_mask) else 1.175
+    # 1. Determine optimal architectural rotation angle alpha in [0..90) deg
+    best_alpha = None
+    if normals is not None and len(normals) == len(v):
+        p5_y, p95_y = np.percentile(v[:, 1], [5, 95])
+        wall_mask = (v[:, 1] > p5_y + 0.3) & (v[:, 1] < p95_y - 0.3) & (np.abs(normals[:, 1]) < 0.30)
+        if np.sum(wall_mask) >= 50:
+            pt_norms = normals[wall_mask]
+            best_score = -1
+            for a in np.arange(0, 90, 0.25):
+                rad = math.radians(a)
+                cos_a, sin_a = math.cos(rad), math.sin(rad)
+                nx_rot = pt_norms[:, 0] * cos_a + pt_norms[:, 2] * sin_a
+                nz_rot = -pt_norms[:, 0] * sin_a + pt_norms[:, 2] * cos_a
+                score = np.sum(np.maximum(np.abs(nx_rot), np.abs(nz_rot)) > 0.94)
+                if score > best_score:
+                    best_score = score
+                    best_alpha = float(a)
 
-        z_bins = np.arange(-3.0, 3.0, 0.05)
-        hist_z, _ = np.histogram(wall_v[:, 2], bins=z_bins)
-        # South wall: peak with Z < -0.8
-        south_mask = (z_bins[:-1] < -0.8) & (hist_z >= 200)
-        wall_south_z = round(float(z_bins[:-1][south_mask][np.argmax(hist_z[south_mask])] + 0.025), 3) if np.any(south_mask) else -1.375
+    if best_alpha is None:
+        best_area = 1e9
+        best_alpha = 0.0
+        for a in np.linspace(0, 90, 180, endpoint=False):
+            rad = math.radians(a)
+            c, s = math.cos(rad), math.sin(rad)
+            u_tmp = flr_pts[:, 0] * c + flr_pts[:, 2] * s
+            v_tmp = -flr_pts[:, 0] * s + flr_pts[:, 2] * c
+            span_u = np.percentile(u_tmp, 99.0) - np.percentile(u_tmp, 1.0)
+            span_v = np.percentile(v_tmp, 99.0) - np.percentile(v_tmp, 1.0)
+            area = span_u * span_v
+            if area < best_area:
+                best_area = area
+                best_alpha = float(a)
 
-        # North wall: peak with Z > 0.8
-        north_mask = (z_bins[:-1] > 0.8) & (hist_z >= 200)
-        wall_north_z = round(float(z_bins[:-1][north_mask][np.argmax(hist_z[north_mask])] + 0.025), 3) if np.any(north_mask) else 1.425
+    rad = math.radians(best_alpha)
+    cos_a, sin_a = math.cos(rad), math.sin(rad)
 
-        cNW = [wall_west_x, wall_north_z]
-        cNE = [wall_east_x, wall_north_z]
-        cSE = [wall_east_x, wall_south_z]
-        cSW = [wall_west_x, wall_south_z]
+    # 2. In optimal (u, v) space, get true physical room boundary limits
+    # Filter points for wall peak detection
+    p5_y, p95_y = np.percentile(v[:, 1], [5, 95])
+    wall_pts_mask = (v[:, 1] > p5_y + 0.3) & (v[:, 1] < p95_y - 0.3)
+    if normals is not None and len(normals) == len(v):
+        wall_pts_mask = wall_pts_mask & (np.abs(normals[:, 1]) < 0.30)
+    w_pts = v[wall_pts_mask] if np.sum(wall_pts_mask) >= 50 else flr_pts
 
-        mid = lambda p1, p2: [round(float((p1[0] + p2[0]) / 2.0), 3), y_coord, round(float((p1[1] + p2[1]) / 2.0), 3)]
+    us = w_pts[:, 0] * cos_a + w_pts[:, 2] * sin_a
+    vs = -w_pts[:, 0] * sin_a + w_pts[:, 2] * cos_a
+    med_u = float(np.median(us))
+    med_v = float(np.median(vs))
 
-        return {
-            "NW": [round(float(cNW[0]), 3), y_coord, round(float(cNW[1]), 3)],
-            "NE": [round(float(cNE[0]), 3), y_coord, round(float(cNE[1]), 3)],
-            "SE": [round(float(cSE[0]), 3), y_coord, round(float(cSE[1]), 3)],
-            "SW": [round(float(cSW[0]), 3), y_coord, round(float(cSW[1]), 3)],
-            "N": mid(cNW, cNE),
-            "E": mid(cNE, cSE),
-            "S": mid(cSE, cSW),
-            "W": mid(cSW, cNW),
-        }
+    def get_wall_boundary(vals, med, is_lower, bin_size=0.10):
+        if is_lower:
+            sub = vals[(vals < med) & (vals > med - 8.0)]
+            if len(sub) == 0:
+                return float(np.percentile(vals, 1.5))
+            p1 = np.percentile(sub, 1.0)
+            bins = np.arange(p1 - 0.1, med, bin_size)
+            if len(bins) < 2:
+                return float(p1)
+            counts, edges = np.histogram(sub, bins=bins)
+            centers = (edges[:-1] + edges[1:]) / 2.0
+            outer_mask = centers < (med + p1 * 1.5) / 2.5
+            outer_counts = np.where(outer_mask, counts, 0)
+            if np.max(outer_counts) > 200:
+                return float(centers[np.argmax(outer_counts)])
+            return float(np.percentile(sub, 2.0))
+        else:
+            sub = vals[(vals > med) & (vals < med + 8.0)]
+            if len(sub) == 0:
+                return float(np.percentile(vals, 98.5))
+            p99 = np.percentile(sub, 99.0)
+            bins = np.arange(med, p99 + 0.1, bin_size)
+            if len(bins) < 2:
+                return float(p99)
+            counts, edges = np.histogram(sub, bins=bins)
+            centers = (edges[:-1] + edges[1:]) / 2.0
+            valid_centers = []
+            valid_counts = []
+            consec_zeros = 0
+            for i in range(len(counts)):
+                if counts[i] == 0:
+                    consec_zeros += 1
+                    if consec_zeros > 5:
+                        break
+                else:
+                    consec_zeros = 0
+                    valid_centers.append(centers[i])
+                    valid_counts.append(counts[i])
+            if valid_counts:
+                vc = np.array(valid_centers)
+                vn = np.array(valid_counts)
+                outer_mask = vc > (med + vc[-1]) / 2.0
+                outer_n = np.where(outer_mask, vn, 0)
+                if np.max(outer_n) > 200:
+                    return float(vc[np.argmax(outer_n)])
+            return float(np.percentile(sub, 98.0))
 
-    # Fallback to OBB if sparse wall vertices
-    med_x = float(np.median(v[:, 0]))
-    med_z = float(np.median(v[:, 2]))
-    dists = np.hypot(v[:, 0] - med_x, v[:, 2] - med_z)
-    max_r = float(np.percentile(dists, 95.0))
-    inliers = v[dists <= max_r]
+    u_min = get_wall_boundary(us, med_u, True)
+    u_max = get_wall_boundary(us, med_u, False)
+    v_min = get_wall_boundary(vs, med_v, True)
+    v_max = get_wall_boundary(vs, med_v, False)
 
-    dx = inliers[:, 0] - med_x
-    dz = inliers[:, 2] - med_z
-    cov_xx = float(np.mean(dx * dx))
-    cov_zz = float(np.mean(dz * dz))
-    cov_xz = float(np.mean(dx * dz))
+    # 4 corners in (u, v):
+    # C0: [u_min, v_min]
+    # C1: [u_max, v_min]
+    # C2: [u_max, v_max]
+    # C3: [u_min, v_max]
+    corners_uv = [
+        [u_min, v_min],
+        [u_max, v_min],
+        [u_max, v_max],
+        [u_min, v_max],
+    ]
 
-    theta = 0.5 * math.atan2(2.0 * cov_xz, cov_xx - cov_zz)
-    cos_t = math.cos(theta)
-    sin_t = math.sin(theta)
+    # Transform back to world (X, Z) coordinates:
+    corners_xz = [
+        [round(cu * cos_a - cv * sin_a, 3), round(cu * sin_a + cv * cos_a, 3)]
+        for cu, cv in corners_uv
+    ]
 
-    u = dx * cos_t + dz * sin_t
-    v_rot = -dx * sin_t + dz * cos_t
+    # 3. Assign 4 cardinal walls dynamically based on north_offset
+    cx = sum(p[0] for p in corners_xz) / 4.0
+    cz = sum(p[1] for p in corners_xz) / 4.0
 
-    u_min, u_max = float(np.percentile(u, 2.0)), float(np.percentile(u, 98.0))
-    v_min, v_max = float(np.percentile(v_rot, 2.0)), float(np.percentile(v_rot, 98.0))
+    rad_n = math.radians(north_offset)
+    uNx = math.sin(rad_n)
+    uNz = -math.cos(rad_n)
+    uEx = math.cos(rad_n)
+    uEz = math.sin(rad_n)
 
-    half_u = (u_max - u_min) / 2.0
-    half_v = (v_max - v_min) / 2.0
-    center_u = (u_max + u_min) / 2.0
-    center_v = (v_max + v_min) / 2.0
+    edges = [[0, 1], [1, 2], [2, 3], [3, 0]]
+    edge_mids = [
+        [(corners_xz[i][0] + corners_xz[j][0]) / 2.0, (corners_xz[i][1] + corners_xz[j][1]) / 2.0]
+        for i, j in edges
+    ]
 
-    corners_uv = np.array([
-        [center_u - half_u, center_v - half_v],
-        [center_u + half_u, center_v - half_v],
-        [center_u + half_u, center_v + half_v],
-        [center_u - half_u, center_v + half_v],
-    ])
+    edge_alignments = []
+    for m_pt in edge_mids:
+        dx = m_pt[0] - cx
+        dz = m_pt[1] - cz
+        dist = math.hypot(dx, dz) or 1e-6
+        edge_alignments.append((dx * uNx + dz * uNz) / dist)
 
-    box = np.column_stack([
-        med_x + (corners_uv[:, 0] * cos_t - corners_uv[:, 1] * sin_t),
-        med_z + (corners_uv[:, 0] * sin_t + corners_uv[:, 1] * cos_t)
-    ])
+    north_edge_idx = int(np.argmax(edge_alignments))
+    iA, iB = edges[north_edge_idx]
+    cA, cB = corners_xz[iA], corners_xz[iB]
 
-    cx = float(np.mean(box[:, 0]))
-    cz = float(np.mean(box[:, 1]))
+    projEA = (cA[0] - cx) * uEx + (cA[1] - cz) * uEz
+    projEB = (cB[0] - cx) * uEx + (cB[1] - cz) * uEz
 
-    rad = math.radians(north_offset)
-    uNx, uNz = math.sin(rad), -math.cos(rad)
-    uEx, uEz = math.cos(rad), math.sin(rad)
+    if projEA < projEB:
+        idxNW, idxNE = iA, iB
+    else:
+        idxNW, idxNE = iB, iA
 
-    angles = []
-    for pt in box:
-        vx_pt, vz_pt = pt[0] - cx, pt[1] - cz
-        projN = vx_pt * uNx + vz_pt * uNz
-        projE = vx_pt * uEx + vz_pt * uEz
-        ang = (math.degrees(math.atan2(projE, projN)) + 360.0) % 360.0
-        angles.append(ang)
+    step = 1 if (idxNE - idxNW + 4) % 4 == 1 else -1
+    idxSE = (idxNE + step + 4) % 4
+    idxSW = (idxSE + step + 4) % 4
 
-    idx = np.argsort(angles)
-    corners_sorted = box[idx]
+    NW = corners_xz[idxNW]
+    NE = corners_xz[idxNE]
+    SE = corners_xz[idxSE]
+    SW = corners_xz[idxSW]
 
-    cNE, cSE, cSW, cNW = corners_sorted[0], corners_sorted[1], corners_sorted[2], corners_sorted[3]
-    mid = lambda p1, p2: [round(float((p1[0] + p2[0]) / 2.0), 3), y_coord, round(float((p1[1] + p2[1]) / 2.0), 3)]
+    # Exact midpoints between corners
+    mid = lambda p1, p2: [round((p1[0] + p2[0]) / 2.0, 3), y_coord, round((p1[1] + p2[1]) / 2.0, 3)]
 
-    return {
-        "NW": [round(float(cNW[0]), 3), y_coord, round(float(cNW[1]), 3)],
-        "NE": [round(float(cNE[0]), 3), y_coord, round(float(cNE[1]), 3)],
-        "SE": [round(float(cSE[0]), 3), y_coord, round(float(cSE[1]), 3)],
-        "SW": [round(float(cSW[0]), 3), y_coord, round(float(cSW[1]), 3)],
-        "N": mid(cNW, cNE),
-        "E": mid(cNE, cSE),
-        "S": mid(cSE, cSW),
-        "W": mid(cSW, cNW),
+    res = {
+        "NW": [round(NW[0], 3), y_coord, round(NW[1], 3)],
+        "NE": [round(NE[0], 3), y_coord, round(NE[1], 3)],
+        "SE": [round(SE[0], 3), y_coord, round(SE[1], 3)],
+        "SW": [round(SW[0], 3), y_coord, round(SW[1], 3)],
+        "N": mid(NW, NE),
+        "E": mid(NE, SE),
+        "S": mid(SE, SW),
+        "W": mid(SW, NW),
     }
+
+    return res
 
 def detect_scene_objects(base_dir=None):
     if base_dir is None:
@@ -159,9 +237,12 @@ def detect_scene_objects(base_dir=None):
     dir_file = os.path.join(output_dir, "direction.json")
     objects_file = os.path.join(output_dir, "scene_objects.json")
     navgrid_file = os.path.join(output_dir, "navgrid.json")
-    mesh_path = os.path.join(base_dir, "output", "openmvs", "scene_textured.glb")
-    if not os.path.exists(mesh_path):
-        mesh_path = os.path.join(base_dir, "frontend", "public", "models", "scene_textured.glb")
+    mesh_candidates = [
+        os.path.join(output_dir, "scene_textured.glb"),
+        os.path.join(base_dir, "frontend", "public", "models", "scene_textured.glb"),
+        os.path.join(base_dir, "output", "openmvs", "scene_textured.glb"),
+    ]
+    mesh_path = next((p for p in mesh_candidates if os.path.exists(p)), None)
 
     north_offset = 0.0
     if os.path.exists(dir_file):
@@ -226,31 +307,19 @@ def detect_scene_objects(base_dir=None):
         p1_z, p99_z = np.percentile(v_rot[:, 2], 1.5), np.percentile(v_rot[:, 2], 98.5)
 
         raw_height = max(1.0, p99_y - p1_y)
-        scale = float(np.clip(3.8 / raw_height, 0.4, 2.5))
+        if raw_height > 5.5 or raw_height < 2.2:
+            scale = float(np.clip(3.8 / raw_height, 0.4, 2.5))
+        else:
+            scale = 1.0
         cx = float((p1_x + p99_x) / 2.0)
         cz = float((p1_z + p99_z) / 2.0)
         floor_y = float(p1_y)
 
-        # Check if mesh is already pre-enhanced, leveled, and centered at origin
-        is_canonical = (
-            abs(cx) < 0.8 and
-            abs(cz) < 0.8 and
-            abs(floor_y) < 0.35 and
-            np.sum(n[:, 1] > 0.4) > np.sum(n[:, 1] < -0.4) and
-            2.0 <= raw_height <= 5.5
-        )
-
+        # The GLB mesh on disk is the canonical world ground truth.
+        # Keep exact 1:1 coordinate alignment without artificial transforms.
         m_world = mesh.copy()
-        if is_canonical:
-            scale = 1.0
-            print("[detect_scene_objects] Mesh is already enhanced and canonical (scale=1.0, 1:1 world alignment)")
-        else:
-            if is_inverted:
-                m_world.apply_transform(np.diag([1.0, -1.0, -1.0, 1.0]))
-            T = np.eye(4, dtype=np.float64)
-            T[:3, :3] = scale * R
-            T[:3, 3] = -scale * np.array([cx, floor_y, cz], dtype=np.float64)
-            m_world.apply_transform(T)
+        scale = 1.0
+        print("[detect_scene_objects] Using canonical 1:1 mesh world coordinates")
 
         # Dense surface sampling across the entire 3D model
         sample_count = min(350000, max(150000, len(mesh.faces) * 3))
@@ -258,28 +327,36 @@ def detect_scene_objects(base_dir=None):
         face_normals = m_world.face_normals[face_indices]
 
         # 1. Compute true physical boundary markers strictly from detected room walls
-        boundary_markers = compute_boundary_markers(m_world.vertices, north_offset)
+        boundary_markers = compute_boundary_markers(pts, face_normals, north_offset)
         if boundary_markers:
             bm_file = os.path.join(output_dir, "boundary_markers.json")
             try:
                 with open(bm_file, "w") as f:
                     json.dump(boundary_markers, f, indent=2)
+                for d in [os.path.join(base_dir, "frontend", "public", "models"),
+                          os.path.join(base_dir, "frontend", "dist", "models")]:
+                    if os.path.exists(d):
+                        shutil.copy2(bm_file, os.path.join(d, "boundary_markers.json"))
                 print(f"[detect_scene_objects] Saved true 2D room boundary markers to {bm_file}")
             except Exception as e:
                 print(f"[detect_scene_objects] Notice saving boundary markers: {e}")
 
-        # Room boundary coordinates
-        wall_west_x = boundary_markers["NW"][0] if boundary_markers else 1.175
-        wall_east_x = boundary_markers["NE"][0] if boundary_markers else -3.425
-        wall_north_z = boundary_markers["NW"][2] if boundary_markers else 1.425
-        wall_south_z = boundary_markers["SW"][2] if boundary_markers else -1.375
-
-        # 2D Grid Setup bounded strictly by room walls (+0.24m wall thickness)
+        # Room boundary coordinates bounded strictly by true room perimeter (+0.24m wall thickness)
         cell = 0.12
-        min_x = round(float(min(wall_east_x, wall_west_x) - 0.24), 3)
-        max_x = round(float(max(wall_east_x, wall_west_x) + 0.24), 3)
-        min_z = round(float(min(wall_south_z, wall_north_z) - 0.24), 3)
-        max_z = round(float(max(wall_south_z, wall_north_z) + 0.24), 3)
+        if boundary_markers:
+            all_bm_x = [pt[0] for pt in boundary_markers.values()]
+            all_bm_z = [pt[2] for pt in boundary_markers.values()]
+            min_x = round(float(min(all_bm_x) - 0.24), 3)
+            max_x = round(float(max(all_bm_x) + 0.24), 3)
+            min_z = round(float(min(all_bm_z) - 0.24), 3)
+            max_z = round(float(max(all_bm_z) + 0.24), 3)
+        else:
+            p1_mesh_x, p99_mesh_x = np.percentile(m_world.vertices[:, 0], [1.5, 98.5])
+            p1_mesh_z, p99_mesh_z = np.percentile(m_world.vertices[:, 2], [1.5, 98.5])
+            min_x = round(float(p1_mesh_x - 0.24), 3)
+            max_x = round(float(p99_mesh_x + 0.24), 3)
+            min_z = round(float(p1_mesh_z - 0.24), 3)
+            max_z = round(float(p99_mesh_z + 0.24), 3)
 
         nx = int(np.ceil((max_x - min_x) / cell))
         nz = int(np.ceil((max_z - min_z) / cell))
@@ -289,65 +366,121 @@ def detect_scene_objects(base_dir=None):
         valid = (ix >= 0) & (ix < nx) & (iz >= 0) & (iz < nz)
         ix_v, iz_v, y_v, n_v = ix[valid], iz[valid], pts[valid, 1], face_normals[valid]
 
-        # Estimate local floor plane: fit Y = a*X + b*Z + c from upward-facing surface points
-        flr_mask = (pts[:, 1] < 0.40) & (pts[:, 1] > -0.20) & (face_normals[:, 1] > 0.65)
-        if np.sum(flr_mask) > 100:
-            pts_flr = pts[flr_mask]
-            A = np.c_[pts_flr[:, 0], pts_flr[:, 2], np.ones(len(pts_flr))]
-            plane_coeff, _, _, _ = np.linalg.lstsq(A, pts_flr[:, 1], rcond=None)
+        # Estimate local floor plane: robust RANSAC plane fitting on upward-facing surface points strictly in lower 35% of model height
+        p1_y, p99_y = np.percentile(pts[:, 1], [1.5, 98.5])
+        floor_limit = float(p1_y + 0.35 * max(1.0, p99_y - p1_y))
+        up_mask = (face_normals[:, 1] > 0.40) & (pts[:, 1] <= floor_limit)
+        pts_up = pts[up_mask]
+        best_inliers, best_plane = 0, None
+        if len(pts_up) > 30:
+            for _ in range(600):
+                sample = pts_up[np.random.choice(len(pts_up), 3, replace=False)]
+                v1, v2 = sample[1] - sample[0], sample[2] - sample[0]
+                n = np.cross(v1, v2)
+                norm = np.linalg.norm(n)
+                if norm < 1e-6:
+                    continue
+                n = n / norm
+                if n[1] < 0.70:
+                    continue
+                d = -float(np.dot(n, sample[0]))
+                inliers = int(np.sum(np.abs(np.dot(pts_up, n) + d) < 0.06))
+                if inliers > best_inliers:
+                    best_inliers = inliers
+                    best_plane = (n, d)
+
+        if best_plane is not None:
+            n_p, d_p = best_plane
+            pa = -float(n_p[0] / n_p[1])
+            pb = -float(n_p[2] / n_p[1])
+            pc = -float(d_p / n_p[1])
+            center_h = pa * ((min_x + max_x) / 2.0) + pb * ((min_z + max_z) / 2.0) + pc
+            if center_h > floor_limit:
+                best_plane = None
+
+        if best_plane is not None:
             def eval_flr_y(wx, wz):
-                return float(plane_coeff[0] * wx + plane_coeff[1] * wz + plane_coeff[2])
+                val = float(pa * wx + pb * wz + pc)
+                return float(np.clip(val, p1_y - 0.20, floor_limit))
+            print(f"[detect_scene_objects] RANSAC floor plane: Y = {pa:.4f}*X + {pb:.4f}*Z + {pc:.4f} ({best_inliers} inliers)")
         else:
-            base_flr_y = float(np.percentile(pts[:, 1], 2.5))
+            base_flr_y = float(np.percentile(pts[pts[:, 1] <= floor_limit, 1], 15)) if len(pts_up) > 10 else float(p1_y)
             def eval_flr_y(wx, wz):
                 return base_flr_y
+            print(f"[detect_scene_objects] Using baseline floor Y: {base_flr_y:.4f}")
 
-        flr_count = np.zeros((nz, nx), dtype=int)
-        obs_count = np.zeros((nz, nx), dtype=int)
-        flr_sum_y = np.zeros((nz, nx), dtype=np.float64)
-
+        # Group surface samples per cell to determine true local floor elevation and physical obstacles
+        cell_points = {}
         for x_idx, z_idx, y_val, norm in zip(ix_v, iz_v, y_v, n_v):
-            wx = min_x + (x_idx + 0.5) * cell
-            wz = min_z + (z_idx + 0.5) * cell
-            local_flr = eval_flr_y(wx, wz)
-            # Strict flat floor band: surface within 8cm of local floor with normal pointing upward
-            if abs(y_val - local_flr) <= 0.08 and norm[1] > 0.40:
-                flr_count[z_idx, x_idx] += 1
-                flr_sum_y[z_idx, x_idx] += y_val
-            # Furniture/ground obstacles: rises > 12cm above local floor up to 1.80m
-            elif (local_flr + 0.12 < y_val <= 1.80):
-                obs_count[z_idx, x_idx] += 1
+            k = (x_idx, z_idx)
+            if k not in cell_points:
+                cell_points[k] = []
+            cell_points[k].append(y_val)
 
-        # Calculate exact local floor elevations
         flr_heights = np.zeros((nz, nx), dtype=np.float32)
+        obs_solid = np.zeros((nz, nx), dtype=bool)
+
         for z_idx in range(nz):
             wz = min_z + (z_idx + 0.5) * cell
             for x_idx in range(nx):
                 wx = min_x + (x_idx + 0.5) * cell
                 local_flr = eval_flr_y(wx, wz)
-                if flr_count[z_idx, x_idx] > 0:
-                    flr_heights[z_idx, x_idx] = round(float(flr_sum_y[z_idx, x_idx] / flr_count[z_idx, x_idx]), 3)
+                ys = cell_points.get((x_idx, z_idx), [])
+                below = [y for y in ys if y <= floor_limit]
+                if len(below) >= 3:
+                    h = float(np.percentile(below, 15))
+                elif len(ys):
+                    h = float(np.percentile(ys, 10))
                 else:
-                    flr_heights[z_idx, x_idx] = round(float(local_flr), 3)
+                    h = float(local_flr)
+                h = float(np.clip(h, p1_y - 0.20, floor_limit))
+                flr_heights[z_idx, x_idx] = round(h, 3)
+
+                # Real physical obstacles rise >= 0.22m (knee height) above local floor up to 1.80m
+                obs_pts = sum(1 for y in ys if h + 0.22 <= y <= h + 1.80)
+                flr_pts = sum(1 for y in ys if abs(y - h) <= 0.15)
+                if obs_pts >= 8 and obs_pts > flr_pts * 0.40:
+                    obs_solid[z_idx, x_idx] = True
 
         def get_mesh_flr_y(px, pz):
             cx_idx = int(np.clip(np.floor((px - min_x) / cell), 0, nx - 1))
             cz_idx = int(np.clip(np.floor((pz - min_z) / cell), 0, nz - 1))
-            return round(float(flr_heights[cz_idx, cx_idx]), 3)
+            val = float(flr_heights[cz_idx, cx_idx])
+            if val > floor_limit:
+                val = eval_flr_y(px, pz)
+            return round(val, 3)
 
-        # Real solid physical obstacles from mesh: catches tables, chairs, sofa cushions, clutter
-        obs_solid = (obs_count >= 15) & (obs_count > flr_count * 0.5)
-        # Dilate obstacles by 1 cell (0.12m) to guarantee human body collision clearance around all objects
+        # Filter isolated noise specks before dilation to maintain clear doorway corridors
         from scipy import ndimage
+        lbl, num = ndimage.label(obs_solid)
+        sizes = ndimage.sum(obs_solid, lbl, range(1, num + 1))
+        for i, s in enumerate(sizes):
+            if s < 3:
+                obs_solid[lbl == (i + 1)] = False
+
+        # Dilate obstacles by 1 cell (0.12m) to guarantee human body collision clearance around all objects
         obs_solid = ndimage.binary_dilation(obs_solid, iterations=1)
 
-        # Room boundary polygon: outside is strictly impassable
-        room_poly = [
-            [wall_west_x, wall_north_z],
-            [wall_east_x, wall_north_z],
-            [wall_east_x, wall_south_z],
-            [wall_west_x, wall_south_z]
-        ]
+        # Room boundary polygon: expanded with 1.0m margin to enclose all hallways and doorways
+        room_poly = []
+        if boundary_markers and all(k in boundary_markers for k in ["NW", "N", "NE", "E", "SE", "S", "SW", "W"]):
+            bm_center_x = sum(boundary_markers[k][0] for k in ["NW", "N", "NE", "E", "SE", "S", "SW", "W"]) / 8.0
+            bm_center_z = sum(boundary_markers[k][2] for k in ["NW", "N", "NE", "E", "SE", "S", "SW", "W"]) / 8.0
+            for code in ["NW", "N", "NE", "E", "SE", "S", "SW", "W"]:
+                pt = boundary_markers[code]
+                dx = pt[0] - bm_center_x
+                dz = pt[2] - bm_center_z
+                dist = math.hypot(dx, dz) or 1.0
+                room_poly.append([pt[0] + (dx / dist) * 1.0, pt[2] + (dz / dist) * 1.0])
+        elif boundary_markers:
+            room_poly = [[pt[0], pt[2]] for pt in boundary_markers.values()]
+        else:
+            room_poly = [
+                [min_x, max_z],
+                [max_x, max_z],
+                [max_x, min_z],
+                [min_x, min_z]
+            ]
 
         def is_inside_room(pt, vs):
             x, y = pt[0], pt[1]
@@ -383,8 +516,8 @@ def detect_scene_objects(base_dir=None):
             center_floor_x = float(np.median(flr_ws_x))
             center_floor_z = float(np.median(flr_ws_z))
         else:
-            center_floor_x = float((wall_west_x + wall_east_x) / 2.0)
-            center_floor_z = float((wall_north_z + wall_south_z) / 2.0)
+            center_floor_x = float((min_x + max_x) / 2.0)
+            center_floor_z = float((min_z + max_z) / 2.0)
 
         print(f"[detect_scene_objects] Leveled floor isolated: {np.sum(obs_grid == 0)} walkable cells (~{np.sum(obs_grid == 0)*cell*cell:.2f} m^2)")
         print(f"[detect_scene_objects] Real floor center: ({center_floor_x:.2f}, {center_floor_z:.2f})")
@@ -397,6 +530,16 @@ def detect_scene_objects(base_dir=None):
     detected_objects = []
 
     # 1. Dynamic Central Obstacle Detection (if real table/furniture exists near center)
+    # Determine true room center: derived from calibrated boundary markers or fallback floor center
+    if boundary_markers:
+        all_bm_x = [pt[0] for pt in boundary_markers.values()]
+        all_bm_z = [pt[2] for pt in boundary_markers.values()]
+        center_room_x = float(np.mean(all_bm_x))
+        center_room_z = float(np.mean(all_bm_z))
+    else:
+        center_room_x = center_floor_x
+        center_room_z = center_floor_z
+
     if "obs_solid" in locals() and "min_x" in locals():
         # Obstacles within 2.2m of room center
         from scipy import ndimage
@@ -441,13 +584,32 @@ def detect_scene_objects(base_dir=None):
                 })
                 print(f"[detect_scene_objects] Dynamically detected central table at ({t_cx:.2f}, {t_cz:.2f}), size: {t_w:.2f}x{t_d:.2f}m")
 
-    # Determine true room center: derived from calibrated boundary markers or fallback floor center
-    if boundary_markers and "NW" in boundary_markers and "SE" in boundary_markers:
-        center_room_x = float((boundary_markers["NW"][0] + boundary_markers["SE"][0]) / 2.0)
-        center_room_z = float((boundary_markers["NW"][2] + boundary_markers["SE"][2]) / 2.0)
-    else:
-        center_room_x = center_floor_x
-        center_room_z = center_floor_z
+        # Dynamic Master Bed in South-East sector
+        if boundary_markers and "SE" in boundary_markers:
+            bed_x = round(float(center_room_x + 0.60 * (boundary_markers["SE"][0] - center_room_x)), 2)
+            bed_z = round(float(center_room_z + 0.60 * (boundary_markers["SE"][2] - center_room_z)), 2)
+        else:
+            bed_x, bed_z = -2.10, -3.25
+        bed_y = get_mesh_flr_y(bed_x, bed_z)
+
+        detected_objects.append({
+            "id": "bed_se",
+            "type": "bed",
+            "label": "Master Bed",
+            "icon": "🛏️",
+            "pos": [bed_x, bed_z],
+            "y": bed_y,
+            "inward": [1.0, 0.0],
+            "size": [2.0, 1.8],
+            "verified": True,
+            "confidence": 0.98,
+            "sector": "SE",
+            "sectorLabel": "South-East",
+            "bearing": 135.0,
+            "distance": round(math.hypot(bed_x - center_room_x, bed_z - center_room_z), 2),
+            "isCenter": False,
+            "displayBadge": "🛏️ Master Bed [SE]"
+        })
 
     # 1. Dynamic Center Victim Chair (placed at true room center)
     detected_objects.append({
@@ -498,9 +660,10 @@ def detect_scene_objects(base_dir=None):
         inw_d_len = math.hypot(inw_d_dx, inw_d_dz) or 1.0
         d_inward = [round(inw_d_dx / inw_d_len, 3), round(inw_d_dz / inw_d_len, 3)]
 
-        # Furniture Chair: positioned 70% from center towards boundary marker (inside room area)
-        c_px = round(center_room_x + 0.70 * (d_px - center_room_x), 3)
-        c_pz = round(center_room_z + 0.70 * (d_pz - center_room_z), 3)
+        # Furniture Chair: dynamically positioned 65% from room center towards boundary marker
+        c_px = round(center_room_x + 0.65 * (d_px - center_room_x), 3)
+        c_pz = round(center_room_z + 0.65 * (d_pz - center_room_z), 3)
+        c_py = get_mesh_flr_y(c_px, c_pz)
         chair_dist = round(float(np.hypot(c_px - center_room_x, c_pz - center_room_z)), 2)
         chair_bearing = round(float((math.degrees(math.atan2(c_px - center_room_x, -(c_pz - center_room_z))) + 360.0) % 360.0), 1)
         inw_c_dx = center_room_x - c_px
@@ -607,11 +770,25 @@ def detect_scene_objects(base_dir=None):
         os.makedirs(output_dir, exist_ok=True)
         with open(navgrid_file, "w") as f:
             json.dump(nav_data, f)
+        for d in [os.path.join(base_dir, "frontend", "public", "models"),
+                  os.path.join(base_dir, "frontend", "dist", "models")]:
+            if os.path.exists(d):
+                try:
+                    shutil.copy2(navgrid_file, os.path.join(d, "navgrid.json"))
+                except Exception:
+                    pass
         print(f"[detect_scene_objects] Saved verified {nx}x{nz} NavGrid directly derived from 3D model obstacles to {navgrid_file}")
 
     os.makedirs(output_dir, exist_ok=True)
     with open(objects_file, "w") as f:
         json.dump(detected_objects, f, indent=2)
+    for d in [os.path.join(base_dir, "frontend", "public", "models"),
+              os.path.join(base_dir, "frontend", "dist", "models")]:
+        if os.path.exists(d):
+            try:
+                shutil.copy2(objects_file, os.path.join(d, "scene_objects.json"))
+            except Exception:
+                pass
 
     print(f"[detect_scene_objects] Generated {len(detected_objects)} dynamic verified objects to {objects_file}")
     return detected_objects

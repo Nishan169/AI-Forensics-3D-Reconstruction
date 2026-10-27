@@ -16,6 +16,8 @@ input/images/
 # Generated reconstruction output
 output/
 
+temp_math_imgs/
+
 # Large model weights (downloaded automatically if absent)
 threat_backend/weights/clip/
 *.dmap

@@ -220,11 +220,34 @@ export function generateDynamicRoomObjects(bounds, baseDir = null, northOffset =
 export function loadPhysicalSceneObjects(baseDir = null, bounds = null, northOffset = 0, boundaryMarkers = null) {
   const cwd = baseDir || process.cwd();
   const objectsFile = path.resolve(cwd, "output/scene_objects.json");
+  const bmPath = path.resolve(cwd, "output/boundary_markers.json");
 
-  const minX = bounds?.min?.[0] ?? -12.0;
-  const maxX = bounds?.max?.[0] ?? 12.0;
-  const minZ = bounds?.min?.[2] ?? -12.0;
-  const maxZ = bounds?.max?.[2] ?? 12.0;
+  // Check for canonical boundary markers on disk or argument
+  let effectiveMarkers = boundaryMarkers;
+  let bmMinX = -12.0, bmMaxX = 12.0, bmMinZ = -12.0, bmMaxZ = 12.0;
+  if (!effectiveMarkers && fs.existsSync(bmPath)) {
+    try {
+      const parsedBM = JSON.parse(fs.readFileSync(bmPath, "utf8"));
+      if (parsedBM && parsedBM.NW && parsedBM.SE) {
+        effectiveMarkers = parsedBM;
+      }
+    } catch (_) {}
+  }
+
+  if (effectiveMarkers && typeof effectiveMarkers === "object") {
+    const pts = Object.values(effectiveMarkers).filter(p => Array.isArray(p) && p.length >= 3);
+    if (pts.length > 0) {
+      bmMinX = Math.min(...pts.map(p => p[0]));
+      bmMaxX = Math.max(...pts.map(p => p[0]));
+      bmMinZ = Math.min(...pts.map(p => p[2]));
+      bmMaxZ = Math.max(...pts.map(p => p[2]));
+    }
+  }
+
+  const minX = Math.min(bounds?.min?.[0] ?? -12.0, bmMinX - 1.0);
+  const maxX = Math.max(bounds?.max?.[0] ?? 12.0, bmMaxX + 1.0);
+  const minZ = Math.min(bounds?.min?.[2] ?? -12.0, bmMinZ - 1.0);
+  const maxZ = Math.max(bounds?.max?.[2] ?? 12.0, bmMaxZ + 1.0);
   const cx = bounds?.center?.[0] || 0;
   const cz = bounds?.center?.[2] || bounds?.center?.[1] || 0;
   const center = [cx, cz];
@@ -240,8 +263,8 @@ export function loadPhysicalSceneObjects(baseDir = null, bounds = null, northOff
         // Verify that cached objects actually fit within current model bounds
         const fitsBounds = parsed.every(obj => {
           if (!Array.isArray(obj.pos)) return false;
-          return obj.pos[0] >= minX - 0.35 && obj.pos[0] <= maxX + 0.35 &&
-                 obj.pos[1] >= minZ - 0.35 && obj.pos[1] <= maxZ + 0.35;
+          return obj.pos[0] >= minX - 0.50 && obj.pos[0] <= maxX + 0.50 &&
+                 obj.pos[1] >= minZ - 0.50 && obj.pos[1] <= maxZ + 0.50;
         });
         if (fitsBounds) {
           rawObjects = parsed;
@@ -252,41 +275,36 @@ export function loadPhysicalSceneObjects(baseDir = null, bounds = null, northOff
     } catch (_) {}
   }
 
-  // Check for boundary markers (from parameter or output/boundary_markers.json)
-  let effectiveMarkers = boundaryMarkers;
-  if (!effectiveMarkers) {
-    try {
-      const bmPath = path.resolve(cwd, "output/boundary_markers.json");
-      if (fs.existsSync(bmPath)) {
-        const parsedBM = JSON.parse(fs.readFileSync(bmPath, "utf8"));
-        if (parsedBM && parsedBM.NW && parsedBM.SE) {
-          const markersFit = [parsedBM.NW, parsedBM.NE, parsedBM.SE, parsedBM.SW].filter(Boolean).every(pt => {
-            return pt[0] >= minX - 0.50 && pt[0] <= maxX + 0.50 &&
-                   pt[2] >= minZ - 0.50 && pt[2] <= maxZ + 0.50;
-          });
-          if (markersFit) {
-            effectiveMarkers = parsedBM;
-          } else {
-            console.log(`[scene_objects] Cached boundary_markers.json does not match active model bounds. Using dynamic markers.`);
-          }
-        }
-      }
-    } catch (_) {}
+  // Check for boundary markers fallback if not loaded from disk
+  if (!effectiveMarkers && boundaryMarkers) {
+    effectiveMarkers = boundaryMarkers;
   }
 
-  // If still no effectiveMarkers and bounds is provided, generate clean dynamic boundary markers strictly inside bounds
+  // If still no effectiveMarkers and bounds is provided, generate clean dynamic boundary markers strictly inside bounds aligned to physical North
   if (!effectiveMarkers && bounds && bounds.min && bounds.max) {
     const floorY = bounds?.floorY ?? bounds?.min?.[1] ?? 0.02;
     const markerY = Number((floorY + 0.35).toFixed(3));
+    const hx = Math.max(1.0, (maxX - minX) * 0.44);
+    const hz = Math.max(1.0, (maxZ - minZ) * 0.44);
+    const radN = ((northOffset || 0) * Math.PI) / 180;
+    const uNx = Math.sin(radN), uNz = -Math.cos(radN);
+    const uEx = Math.cos(radN), uEz = Math.sin(radN);
+
+    const cornerPt = (nOff, eOff) => [
+      Number((cx + eOff * uEx + nOff * uNx).toFixed(3)),
+      markerY,
+      Number((cz + eOff * uEz + nOff * uNz).toFixed(3))
+    ];
+
     effectiveMarkers = {
-      NW: [Number((minX + 0.15).toFixed(3)), markerY, Number((minZ + 0.15).toFixed(3))],
-      NE: [Number((maxX - 0.15).toFixed(3)), markerY, Number((minZ + 0.15).toFixed(3))],
-      SE: [Number((maxX - 0.15).toFixed(3)), markerY, Number((maxZ - 0.15).toFixed(3))],
-      SW: [Number((minX + 0.15).toFixed(3)), markerY, Number((maxZ - 0.15).toFixed(3))],
-      N: [Number(cx.toFixed(3)), markerY, Number((minZ + 0.15).toFixed(3))],
-      S: [Number(cx.toFixed(3)), markerY, Number((maxZ - 0.15).toFixed(3))],
-      E: [Number((maxX - 0.15).toFixed(3)), markerY, Number(cz.toFixed(3))],
-      W: [Number((minX + 0.15).toFixed(3)), markerY, Number(cz.toFixed(3))],
+      NW: cornerPt(hz, -hx),
+      NE: cornerPt(hz, hx),
+      SE: cornerPt(-hz, hx),
+      SW: cornerPt(-hz, -hx),
+      N: cornerPt(hz, 0),
+      S: cornerPt(-hz, 0),
+      E: cornerPt(0, hx),
+      W: cornerPt(0, -hx),
     };
   }
 
@@ -332,23 +350,24 @@ export function loadPhysicalSceneObjects(baseDir = null, bounds = null, northOff
     center[0] = markerCenterX;
     center[1] = markerCenterZ;
 
-    // Harmonize Center furniture (chair_center) strictly at true room center
-    const centerPos = [markerCenterX, markerCenterZ];
+    // Harmonize Center furniture (chair_center) adjacent to central table
+    const centerChairPos = [markerCenterX, Number((markerCenterZ + 0.65).toFixed(3))];
     const existingCenterChair = labelledObjects.find(o => o.id === "chair_center");
     if (existingCenterChair) {
-      existingCenterChair.pos = centerPos;
+      existingCenterChair.pos = centerChairPos;
       existingCenterChair.y = markerFloorY;
-      existingCenterChair.distance = 0.0;
+      existingCenterChair.distance = 0.65;
       existingCenterChair.bearing = 0.0;
       existingCenterChair.sector = "Center";
       existingCenterChair.isCenter = true;
+      existingCenterChair.inward = [0.0, -1.0];
     } else {
       labelledObjects.unshift({
         id: "chair_center",
         type: "chair",
         label: "Victim Chair",
         icon: "🪑",
-        pos: centerPos,
+        pos: centerChairPos,
         y: markerFloorY,
         inward: [0.0, -1.0],
         size: [0.65, 0.65],
@@ -357,23 +376,26 @@ export function loadPhysicalSceneObjects(baseDir = null, bounds = null, northOff
         sector: "Center",
         sectorLabel: "Center",
         bearing: 0.0,
-        distance: 0.0,
+        distance: 0.65,
         isCenter: true,
         displayBadge: "🪑 Victim Chair [Center]"
       });
     }
 
-    // Harmonize table_center: ensure realistic size and position offset from center chair
+    // Harmonize table_center
     const existingCenterTable = labelledObjects.find(o => o.id === "table_center");
     if (existingCenterTable) {
       existingCenterTable.size = [
         Math.min(1.40, existingCenterTable.size?.[0] || 1.20),
-        Math.min(0.90, existingCenterTable.size?.[1] || 0.70)
+        Math.min(0.90, existingCenterTable.size?.[1] || 0.80)
       ];
-      if (Math.hypot(existingCenterTable.pos[0] - markerCenterX, existingCenterTable.pos[1] - markerCenterZ) < 0.75) {
-        existingCenterTable.pos = [markerCenterX, Number((markerCenterZ - 0.85).toFixed(3))];
-        existingCenterTable.inward = [0.0, 1.0];
+      if (!existingCenterTable.pos) {
+        existingCenterTable.pos = [markerCenterX, markerCenterZ];
+        existingCenterTable.y = markerFloorY;
       }
+      existingCenterTable.isCenter = true;
+      existingCenterTable.sector = "Center";
+      existingCenterTable.distance = Number(Math.hypot(existingCenterTable.pos[0] - markerCenterX, existingCenterTable.pos[1] - markerCenterZ).toFixed(2));
     }
 
     for (const sec of CARDINAL_SECTORS) {
@@ -417,19 +439,21 @@ export function loadPhysicalSceneObjects(baseDir = null, bounds = null, northOff
           });
         }
 
-        // Harmonize sector chair: dynamically positioned 70% from room center towards boundary marker
+        // Harmonize sector chair: dynamically positioned 65% from room center towards boundary marker
         const chairPos = [
-          Number((markerCenterX + 0.70 * (dPos[0] - markerCenterX)).toFixed(3)),
-          Number((markerCenterZ + 0.70 * (dPos[1] - markerCenterZ)).toFixed(3))
+          Number((markerCenterX + 0.65 * (dPos[0] - markerCenterX)).toFixed(3)),
+          Number((markerCenterZ + 0.65 * (dPos[1] - markerCenterZ)).toFixed(3))
         ];
         const chairDist = Number(Math.hypot(chairPos[0] - markerCenterX, chairPos[1] - markerCenterZ).toFixed(2));
         const chairId = `chair_${code.toLowerCase()}`;
         const existingChair = labelledObjects.find(o => o.id === chairId);
         if (existingChair) {
-          existingChair.pos = chairPos;
-          existingChair.y = markerFloorY;
+          if (!existingChair.pos || existingChair.y > markerFloorY + 2.0 || Math.hypot(existingChair.pos[0] - dPos[0], existingChair.pos[1] - dPos[1]) > Math.hypot(markerCenterX - dPos[0], markerCenterZ - dPos[1]) * 1.5) {
+            existingChair.pos = chairPos;
+            existingChair.y = markerFloorY;
+          }
           existingChair.inward = dInw;
-          existingChair.distance = chairDist;
+          existingChair.distance = Number(Math.hypot(existingChair.pos[0] - markerCenterX, existingChair.pos[1] - markerCenterZ).toFixed(2));
           existingChair.bearing = sec.angle;
         } else {
           labelledObjects.push({

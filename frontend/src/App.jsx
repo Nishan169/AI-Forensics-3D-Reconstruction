@@ -36,7 +36,7 @@ function SimulationClock({ isPlaying, speed, onTick }) {
 function computeRoomBoundaryMarkers(vertices, northOffset = 0) {
   if (!vertices || vertices.length < 10) return null;
 
-  // 1. Median center & floor Y
+  // 1. Median center & floor/ceil Y
   const xs = vertices.map((v) => v.x).sort((a, b) => a - b);
   const zs = vertices.map((v) => v.z).sort((a, b) => a - b);
   const ys = vertices.map((v) => v.y).sort((a, b) => a - b);
@@ -45,72 +45,151 @@ function computeRoomBoundaryMarkers(vertices, northOffset = 0) {
   const medX = xs[Math.floor(N * 0.5)];
   const medZ = zs[Math.floor(N * 0.5)];
   const floorY = ys[Math.floor(N * 0.025)] || 0;
+  const p5Y = ys[Math.floor(N * 0.05)] || 0;
+  const p95Y = ys[Math.floor(N * 0.95)] || 3.0;
 
-  // 2. Filter outliers beyond 98.5% radius from median to isolate main room core
-  const pts = [];
-  const dists = [];
-  for (let i = 0; i < N; i++) {
-    const dx = vertices[i].x - medX;
-    const dz = vertices[i].z - medZ;
-    const d = Math.hypot(dx, dz);
-    pts.push({ dx, dz, d });
-    dists.push(d);
+  // Filter vertical wall points
+  const wallPts = vertices.filter((v) => {
+    const isY = v.y > p5Y + 0.30 && v.y < p95Y - 0.30;
+    if (v.ny !== undefined) {
+      return isY && Math.abs(v.ny) < 0.30;
+    }
+    return isY;
+  });
+  const pts = wallPts.length >= 50 ? wallPts : vertices;
+
+  // Dominant architectural orientation alpha
+  let bestAlpha = 0;
+  const ptsWithNorm = pts.filter((v) => v.nx !== undefined && v.nz !== undefined);
+  if (ptsWithNorm.length >= 50) {
+    let bestScore = -1;
+    for (let a = 0; a < 90; a += 0.5) {
+      const r = (a * Math.PI) / 180.0;
+      const cosA = Math.cos(r);
+      const sinA = Math.sin(r);
+      let count = 0;
+      for (const p of ptsWithNorm) {
+        const nxRot = p.nx * cosA + p.nz * sinA;
+        const nzRot = -p.nx * sinA + p.nz * cosA;
+        if (Math.max(Math.abs(nxRot), Math.abs(nzRot)) > 0.94) count++;
+      }
+      const score = count / ptsWithNorm.length;
+      if (score > bestScore) {
+        bestScore = score;
+        bestAlpha = a;
+      }
+    }
+  } else {
+    // 2D Covariance fallback
+    let covXX = 0, covZZ = 0, covXZ = 0;
+    for (const p of pts) {
+      const dx = p.x - medX;
+      const dz = p.z - medZ;
+      covXX += dx * dx;
+      covZZ += dz * dz;
+      covXZ += dx * dz;
+    }
+    bestAlpha = (0.5 * Math.atan2(2.0 * covXZ, covXX - covZZ) * (180.0 / Math.PI) + 360.0) % 90.0;
   }
-  dists.sort((a, b) => a - b);
-  const maxR = dists[Math.floor(N * 0.985)] || 10;
-  const inliers = pts.filter((p) => p.d <= maxR);
-  if (inliers.length < 10) return null;
 
-  // 3. 2D Covariance matrix on XZ plane to find room yaw orientation
-  let covXX = 0, covZZ = 0, covXZ = 0;
-  for (const p of inliers) {
-    covXX += p.dx * p.dx;
-    covZZ += p.dz * p.dz;
-    covXZ += p.dx * p.dz;
-  }
-  covXX /= inliers.length;
-  covZZ /= inliers.length;
-  covXZ /= inliers.length;
+  const radA = (bestAlpha * Math.PI) / 180.0;
+  const cosA = Math.cos(radA);
+  const sinA = Math.sin(radA);
 
-  // Principal orientation angle (yaw) of the rectangular room
-  const theta = 0.5 * Math.atan2(2.0 * covXZ, covXX - covZZ);
-  const cosT = Math.cos(theta);
-  const sinT = Math.sin(theta);
+  const us = pts.map((p) => p.x * cosA + p.z * sinA);
+  const vs = pts.map((p) => -p.x * sinA + p.z * cosA);
 
-  // Project points into the room's local aligned coordinate frame (u, v)
-  const us = [];
-  const vs = [];
-  for (const p of inliers) {
-    us.push(p.dx * cosT + p.dz * sinT);
-    vs.push(-p.dx * sinT + p.dz * cosT);
-  }
-  us.sort((a, b) => a - b);
-  vs.sort((a, b) => a - b);
+  const sortedU = [...us].sort((a, b) => a - b);
+  const sortedV = [...vs].sort((a, b) => a - b);
+  const medU = sortedU[Math.floor(sortedU.length * 0.5)];
+  const medV = sortedV[Math.floor(sortedV.length * 0.5)];
 
-  const M = us.length;
-  // 1.5% and 98.5% percentiles tightly snap to the actual walls (ignoring floaters)
-  const uMin = us[Math.floor(M * 0.015)];
-  const uMax = us[Math.floor(M * 0.985)];
-  const vMin = vs[Math.floor(M * 0.015)];
-  const vMax = vs[Math.floor(M * 0.985)];
+  const binSize = 0.10;
+  const findWallPeak = (vals, med, belowMed) => {
+    const sub = belowMed
+      ? vals.filter((v) => v < med && v > med - 8.0)
+      : vals.filter((v) => v > med && v < med + 8.0);
+    if (sub.length === 0) {
+      const sorted = [...vals].sort((a, b) => a - b);
+      return belowMed ? sorted[Math.floor(sorted.length * 0.015)] : sorted[Math.floor(sorted.length * 0.985)];
+    }
+    const sortedSub = [...sub].sort((a, b) => a - b);
+    if (belowMed) {
+      const p1 = sortedSub[Math.floor(sortedSub.length * 0.01)];
+      const minV = p1 - 0.1;
+      const maxV = med;
+      const numBins = Math.max(5, Math.ceil((maxV - minV) / binSize));
+      const counts = new Array(numBins).fill(0);
+      for (const v of sortedSub) {
+        const idx = Math.floor((v - minV) / binSize);
+        if (idx >= 0 && idx < numBins) counts[idx]++;
+      }
+      let bestIdx = -1, maxCount = 0;
+      const cutoff = (med + p1 * 1.5) / 2.5;
+      for (let i = 0; i < numBins; i++) {
+        const center = minV + (i + 0.5) * binSize;
+        if (center < cutoff && counts[i] > maxCount) {
+          maxCount = counts[i];
+          bestIdx = i;
+        }
+      }
+      if (bestIdx >= 0 && maxCount > 15) return minV + (bestIdx + 0.5) * binSize;
+      return sortedSub[Math.floor(sortedSub.length * 0.02)];
+    } else {
+      const p99 = sortedSub[Math.floor(sortedSub.length * 0.99)];
+      const minV = med;
+      const maxV = p99 + 0.1;
+      const numBins = Math.max(5, Math.ceil((maxV - minV) / binSize));
+      const counts = new Array(numBins).fill(0);
+      for (const v of sortedSub) {
+        const idx = Math.floor((v - minV) / binSize);
+        if (idx >= 0 && idx < numBins) counts[idx]++;
+      }
+      const validCenters = [];
+      const validCounts = [];
+      let consecZeros = 0;
+      for (let i = 0; i < numBins; i++) {
+        if (counts[i] === 0) {
+          consecZeros++;
+          if (consecZeros > 5) break;
+        } else {
+          consecZeros = 0;
+          validCenters.push(minV + (i + 0.5) * binSize);
+          validCounts.push(counts[i]);
+        }
+      }
+      if (validCounts.length > 0) {
+        const lastCenter = validCenters[validCenters.length - 1];
+        const cutoff = (med + lastCenter) / 2.0;
+        let bestIdx = -1, maxCount = 0;
+        for (let i = 0; i < validCenters.length; i++) {
+          if (validCenters[i] > cutoff && validCounts[i] > maxCount) {
+            maxCount = validCounts[i];
+            bestIdx = i;
+          }
+        }
+        if (bestIdx >= 0 && maxCount > 15) return validCenters[bestIdx];
+      }
+      return sortedSub[Math.floor(sortedSub.length * 0.98)];
+    }
+  };
 
-  const halfU = (uMax - uMin) / 2.0;
-  const halfV = (vMax - vMin) / 2.0;
-  const centerU = (uMax + uMin) / 2.0;
-  const centerV = (vMax + vMin) / 2.0;
+  const uMin = findWallPeak(us, medU, true);
+  const uMax = findWallPeak(us, medU, false);
+  const vMin = findWallPeak(vs, medV, true);
+  const vMax = findWallPeak(vs, medV, false);
 
-  // 4 corners in room local frame
   const cornersUV = [
-    [centerU - halfU, centerV - halfV],
-    [centerU + halfU, centerV - halfV],
-    [centerU + halfU, centerV + halfV],
-    [centerU - halfU, centerV + halfV],
+    [uMin, vMin],
+    [uMax, vMin],
+    [uMax, vMax],
+    [uMin, vMax],
   ];
 
   // Transform 4 corners back to Three.js world space (X, Z)
   const box = cornersUV.map(([cu, cv]) => [
-    medX + (cu * cosT - cv * sinT),
-    medZ + (cu * sinT + cv * cosT),
+    cu * cosA - cv * sinA,
+    cu * sinA + cv * cosA,
   ]);
 
   // Center of the 4 corners
@@ -124,49 +203,80 @@ function computeRoomBoundaryMarkers(vertices, northOffset = 0) {
   const uEx = Math.cos(rad);
   const uEz = Math.sin(rad);
 
-  // Bearing of each corner relative to North: 0° = North, 90° = East, 180° = South, 270° = West
-  const cornersWithAngle = box.map((pt) => {
-    const vx = pt[0] - cx;
-    const vz = pt[1] - cz;
-    const projN = vx * uNx + vz * uNz;
-    const projE = vx * uEx + vz * uEz;
-    let angle = Math.atan2(projE, projN) * (180.0 / Math.PI);
-    if (angle < 0) angle += 360.0;
-    return { pt, angle };
+  // 4 edges in cyclic order: (0,1), (1,2), (2,3), (3,0)
+  const edges = [
+    [0, 1],
+    [1, 2],
+    [2, 3],
+    [3, 0],
+  ];
+  const edgeMids = edges.map(([i, j]) => [
+    (box[i][0] + box[j][0]) / 2.0,
+    (box[i][1] + box[j][1]) / 2.0,
+  ]);
+
+  // Find North wall: edge midpoint with highest normalized alignment along North vector
+  const edgeAlignments = edgeMids.map((m) => {
+    const dx = m[0] - cx;
+    const dz = m[1] - cz;
+    const dist = Math.hypot(dx, dz) || 1e-6;
+    return (dx * uNx + dz * uNz) / dist;
+  });
+  let northEdgeIdx = 0;
+  let maxAlign = -Infinity;
+  edgeAlignments.forEach((align, idx) => {
+    if (align > maxAlign) {
+      maxAlign = align;
+      northEdgeIdx = idx;
+    }
   });
 
-  // Sort corners cyclically starting clockwise from North (0° → 360°)
-  cornersWithAngle.sort((a, b) => a.angle - b.angle);
+  const [iA, iB] = edges[northEdgeIdx];
+  const cA = box[iA];
+  const cB = box[iB];
 
-  // In clockwise cyclical order around any rectangle:
-  // 1st corner clockwise from North is NE
-  // 2nd corner is SE
-  // 3rd corner is SW
-  // 4th corner is NW
-  const cNE = cornersWithAngle[0].pt;
-  const cSE = cornersWithAngle[1].pt;
-  const cSW = cornersWithAngle[2].pt;
-  const cNW = cornersWithAngle[3].pt;
+  // Of the two corners on the North wall, smaller East projection is NW, larger is NE
+  const projEA = (cA[0] - cx) * uEx + (cA[1] - cz) * uEz;
+  const projEB = (cB[0] - cx) * uEx + (cB[1] - cz) * uEz;
 
-  const yCoord = floorY + 0.35;
+  let idxNW, idxNE;
+  if (projEA < projEB) {
+    idxNW = iA;
+    idxNE = iB;
+  } else {
+    idxNW = iB;
+    idxNE = iA;
+  }
 
-  // Helper for midpoint of wall between two corners
+  // Trace cyclically along the rectangle to assign SE and SW
+  const step = (idxNE - idxNW + 4) % 4 === 1 ? 1 : -1;
+  const idxSE = (idxNE + step + 4) % 4;
+  const idxSW = (idxSE + step + 4) % 4;
+
+  const NW = box[idxNW];
+  const NE = box[idxNE];
+  const SE = box[idxSE];
+  const SW = box[idxSW];
+
+  const yCoord = Number((Math.max(0, floorY) + 0.35).toFixed(3));
   const mid = (p1, p2) => [
-    (p1[0] + p2[0]) / 2.0,
+    Number(((p1[0] + p2[0]) / 2.0).toFixed(3)),
     yCoord,
-    (p1[1] + p2[1]) / 2.0,
+    Number(((p1[1] + p2[1]) / 2.0).toFixed(3)),
   ];
 
-  return {
-    NW: [cNW[0], yCoord, cNW[1]],
-    NE: [cNE[0], yCoord, cNE[1]],
-    SE: [cSE[0], yCoord, cSE[1]],
-    SW: [cSW[0], yCoord, cSW[1]],
-    N: mid(cNW, cNE),
-    E: mid(cNE, cSE),
-    S: mid(cSE, cSW),
-    W: mid(cSW, cNW),
+  const result = {
+    NW: [Number(NW[0].toFixed(3)), yCoord, Number(NW[1].toFixed(3))],
+    NE: [Number(NE[0].toFixed(3)), yCoord, Number(NE[1].toFixed(3))],
+    SE: [Number(SE[0].toFixed(3)), yCoord, Number(SE[1].toFixed(3))],
+    SW: [Number(SW[0].toFixed(3)), yCoord, Number(SW[1].toFixed(3))],
+    N: mid(NW, NE),
+    E: mid(NE, SE),
+    S: mid(SE, SW),
+    W: mid(SW, NW),
   };
+
+  return result;
 }
 
 // ── 3D Model + auto-fit camera to bounding box ────────────────────────
@@ -274,12 +384,6 @@ function ModelWithCamera({
 
     if (xs.length < 10) return;
 
-    // [Orientation Check - Preserved for inverted raw meshes]
-    // DUSt3R neural reconstruction generates canonical +Y-up meshes directly.
-    // For legacy/un-flipped camera coordinates, rotationX = Math.PI is applied if downNormals > upNormals.
-    const isCOLMAPInverted = downNormals > upNormals || (upNormals === 0 && downNormals === 0);
-    const rotationX = isCOLMAPInverted ? Math.PI : 0;
-
     // Detect upward floor normal to level the room mesh horizontally
     let floorNx = 0, floorNy = 0, floorNz = 0, floorCount = 0;
     scene.traverse((child) => {
@@ -290,11 +394,8 @@ function ModelWithCamera({
           const step = Math.max(1, Math.floor(norm.count / 2500));
           for (let i = 0; i < norm.count; i += step) {
             n.fromBufferAttribute(norm, i);
-            const ny = isCOLMAPInverted ? -n.y : n.y;
-            const nz = isCOLMAPInverted ? -n.z : n.z;
-            const nx = n.x;
-            if (ny > 0.5) {
-              floorNx += nx; floorNy += ny; floorNz += nz;
+            if (n.y > 0.5) {
+              floorNx += n.x; floorNy += n.y; floorNz += n.z;
               floorCount++;
             }
           }
@@ -312,13 +413,8 @@ function ModelWithCamera({
       tiltRotZ = Math.atan2(floorNx, floorNy);
     }
 
-    if (isCOLMAPInverted) {
-      const qFlip = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI);
-      const qLevel = new THREE.Quaternion().setFromEuler(new THREE.Euler(tiltRotX, 0, tiltRotZ, "XYZ"));
-      groupRef.current.quaternion.copy(qLevel.multiply(qFlip));
-    } else {
-      groupRef.current.rotation.set(tiltRotX, 0, tiltRotZ);
-    }
+    const qLevel = new THREE.Quaternion().setFromEuler(new THREE.Euler(tiltRotX, 0, tiltRotZ, "XYZ"));
+    groupRef.current.quaternion.copy(qLevel);
     groupRef.current.rotation.setFromQuaternion(groupRef.current.quaternion, "XYZ");
     groupRef.current.updateMatrixWorld(true);
 
@@ -364,20 +460,21 @@ function ModelWithCamera({
     const spanX = Math.max(2.0, p99_x - p1_x);
     const spanZ = Math.max(2.0, p99_z - p1_z);
 
+    // Check if mesh is already pre-enhanced, leveled, and canonical
+    const isPreEnhanced =
+      Boolean(serverBoundaryMarkers?.NW && serverBoundaryMarkers?.SE) ||
+      (Math.abs(tiltRotX) < 0.15 &&
+       Math.abs(tiltRotZ) < 0.15 &&
+       Math.abs(centerX) < 1.2 &&
+       Math.abs(centerZ) < 1.2 &&
+       Math.abs(floorY) < 0.50 &&
+       rawHeight <= 12.0);
+
     // Normalize height if unrealistically large (> 5.5m) or small (< 2.2m)
     let modelScale = 1.0;
-    if (rawHeight > 5.5 || rawHeight < 2.2) {
+    if (!isPreEnhanced && (rawHeight > 5.5 || rawHeight < 2.2)) {
       modelScale = THREE.MathUtils.clamp(3.8 / rawHeight, 0.4, 2.5);
     }
-
-    // Check if mesh is already pre-enhanced, leveled, and canonical
-    const isPreEnhanced = !isCOLMAPInverted &&
-      Math.abs(tiltRotX) < 0.08 &&
-      Math.abs(tiltRotZ) < 0.08 &&
-      Math.abs(centerX) < 0.8 &&
-      Math.abs(centerZ) < 0.8 &&
-      Math.abs(floorY) < 0.35 &&
-      rawHeight >= 2.0 && rawHeight <= 5.5;
 
     let finalPos = [-centerX * modelScale, -floorY * modelScale, -centerZ * modelScale];
     let finalRotation = [groupRef.current.rotation.x, groupRef.current.rotation.y, groupRef.current.rotation.z];
@@ -416,7 +513,11 @@ function ModelWithCamera({
     const maxSpan = Math.max(finalSizeX, finalSizeZ);
     const roomRadius = Math.min(finalSizeX, finalSizeZ) * 0.44;
 
-    // Position camera to look directly into the centered room at actor height (1.2m)
+    // Position camera to look directly into the room
+    const targetX = isPreEnhanced ? centerX : 0;
+    const targetY = isPreEnhanced ? floorY + 1.2 : 1.2;
+    const targetZ = isPreEnhanced ? centerZ : 0;
+
     const fovRad = (camera.fov * Math.PI) / 180;
     const dist = (maxSpan / 2 / Math.tan(fovRad / 2)) * 1.25;
     const camY = THREE.MathUtils.clamp(finalSizeY * 0.65, 1.8, 4.5);
@@ -424,13 +525,13 @@ function ModelWithCamera({
     const rad = ((northOffset || 0) * Math.PI) / 180;
     const nx = Math.sin(rad);
     const nz = -Math.cos(rad);
-    camera.position.set(-nx * dist, camY, -nz * dist);
+    camera.position.set(targetX - nx * dist, isPreEnhanced ? floorY + camY : camY, targetZ - nz * dist);
     camera.near = 0.05;
     camera.far = maxSpan * 50;
     camera.updateProjectionMatrix();
 
     if (controlsRef?.current) {
-      controlsRef.current.target.set(0, 1.2, 0);
+      controlsRef.current.target.set(targetX, targetY, targetZ);
       controlsRef.current.update();
     }
 
@@ -440,32 +541,64 @@ function ModelWithCamera({
     let bMinY = Infinity, bMaxY = -Infinity;
     let bMinZ = Infinity, bMaxZ = -Infinity;
 
+    const normalMatrix = new THREE.Matrix3();
+    const tempNormal = new THREE.Vector3();
     scene.traverse((child) => {
       if (child.isMesh && child.geometry?.attributes?.position) {
         const pos = child.geometry.attributes.position;
+        const norm = child.geometry.attributes.normal;
+        if (norm) {
+          normalMatrix.getNormalMatrix(child.matrixWorld);
+        }
         const v = new THREE.Vector3();
         const step = Math.max(1, Math.floor(pos.count / 2500));
         for (let i = 0; i < pos.count; i += step) {
           v.fromBufferAttribute(pos, i);
           v.applyMatrix4(child.matrixWorld);
-          worldVerts.push({ x: v.x, y: v.y, z: v.z });
+          if (norm) {
+            tempNormal.fromBufferAttribute(norm, i);
+            tempNormal.applyMatrix3(normalMatrix).normalize();
+            worldVerts.push({ x: v.x, y: v.y, z: v.z, nx: tempNormal.x, ny: tempNormal.y, nz: tempNormal.z });
+          } else {
+            worldVerts.push({ x: v.x, y: v.y, z: v.z });
+          }
         }
       }
     });
 
-    const boundaryMarkers = serverBoundaryMarkers || computeRoomBoundaryMarkers(worldVerts, northOffset);
+    // 1. PRIMARY: If server boundary markers are provided and valid, prioritize them for exact alignment
+    let boundaryMarkers = null;
+    if (serverBoundaryMarkers && serverBoundaryMarkers.NW && serverBoundaryMarkers.SE && serverBoundaryMarkers.N) {
+      if (isPreEnhanced) {
+        boundaryMarkers = serverBoundaryMarkers;
+      } else {
+        boundaryMarkers = {};
+        for (const [k, pt] of Object.entries(serverBoundaryMarkers)) {
+          boundaryMarkers[k] = [
+            Number((pt[0] * modelScale + finalPos[0]).toFixed(3)),
+            Number((pt[1] * modelScale + finalPos[1]).toFixed(3)),
+            Number((pt[2] * modelScale + finalPos[2]).toFixed(3)),
+          ];
+        }
+      }
+    } else {
+      boundaryMarkers = computeRoomBoundaryMarkers(worldVerts, northOffset);
+    }
 
     let roomMinX = p1_x, roomMaxX = p99_x;
     let roomMinZ = p1_z, roomMaxZ = p99_z;
     let roomFloorY = floorY, roomCeilY = ceilingY;
 
-    if (boundaryMarkers?.NW && boundaryMarkers?.SE && boundaryMarkers?.NE && boundaryMarkers?.SW) {
-      const bPts = [boundaryMarkers.NW, boundaryMarkers.NE, boundaryMarkers.SE, boundaryMarkers.SW];
-      roomMinX = Math.min(...bPts.map((p) => p[0]));
-      roomMaxX = Math.max(...bPts.map((p) => p[0]));
-      roomMinZ = Math.min(...bPts.map((p) => p[2]));
-      roomMaxZ = Math.max(...bPts.map((p) => p[2]));
-      roomFloorY = Number(((boundaryMarkers.NW[1] ?? 0.35) - 0.33).toFixed(3));
+    if (boundaryMarkers) {
+      const bPts = Object.values(boundaryMarkers).filter((p) => Array.isArray(p) && p.length >= 3);
+      if (bPts.length > 0) {
+        roomMinX = Math.min(roomMinX, ...bPts.map((p) => p[0]));
+        roomMaxX = Math.max(roomMaxX, ...bPts.map((p) => p[0]));
+        roomMinZ = Math.min(roomMinZ, ...bPts.map((p) => p[2]));
+        roomMaxZ = Math.max(roomMaxZ, ...bPts.map((p) => p[2]));
+        const firstPt = bPts[0];
+        roomFloorY = Number(((firstPt[1] ?? floorY) - 0.33).toFixed(3));
+      }
     }
 
     const realCenter = [
@@ -496,9 +629,14 @@ function ModelWithCamera({
         modelScale,
         boundaryMarkers,
         bounds: realBounds,
+        transform: {
+          position: finalPos,
+          scale: modelScale,
+          rotation: finalRotation,
+        },
       });
     }
-  }, [scene, url, northOffset]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [scene, url, northOffset, serverBoundaryMarkers]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <group>
@@ -528,11 +666,36 @@ function CameraTracker({ azimuthRef, controlsRef }) {
   return null;
 }
 
+// ── Direction Box 3D Perimeter Outline (connecting 4 corners on floor) ──
+function DirectionBoxOutline({ markers }) {
+  const lineObj = useMemo(() => {
+    if (!markers || !markers.NW || !markers.NE || !markers.SE || !markers.SW) return null;
+    const pts = [
+      new THREE.Vector3(markers.NW[0], markers.NW[1], markers.NW[2]),
+      new THREE.Vector3(markers.NE[0], markers.NE[1], markers.NE[2]),
+      new THREE.Vector3(markers.SE[0], markers.SE[1], markers.SE[2]),
+      new THREE.Vector3(markers.SW[0], markers.SW[1], markers.SW[2]),
+      new THREE.Vector3(markers.NW[0], markers.NW[1], markers.NW[2]),
+    ];
+    const geom = new THREE.BufferGeometry().setFromPoints(pts);
+    const mat = new THREE.LineBasicMaterial({
+      color: 0xef4444,
+      transparent: true,
+      opacity: 0.75,
+      linewidth: 2,
+    });
+    return new THREE.Line(geom, mat);
+  }, [markers]);
+
+  return lineObj ? <primitive object={lineObj} /> : null;
+}
+
 // ── 3D Direction Markers (strictly on 4 room corners & 4 wall midpoints) ──
 function DirectionMarkers({ markers, northOffset = 0, target = [0, 0, 0], radius = 2.4, roomSize = null, onSelectDirection }) {
   if (markers && Object.keys(markers).length > 0) {
     return (
-      <>
+      <group>
+        <DirectionBoxOutline markers={markers} />
         {Object.entries(markers).map(([label, pos]) => {
           const isNorth = label === "N";
           const isPrimary = ["N", "S", "E", "W"].includes(label);
@@ -554,7 +717,7 @@ function DirectionMarkers({ markers, northOffset = 0, target = [0, 0, 0], radius
             </Html>
           );
         })}
-      </>
+      </group>
     );
   }
 
@@ -1028,7 +1191,16 @@ export default function App() {
         throw new Error(errJson.error || `Server responded with ${res.status}`);
       }
 
+      const data = await res.json();
+      if (data.boundaryMarkers) setServerBoundaryMarkers(data.boundaryMarkers);
+      if (data.northOffset !== undefined) {
+        setNorthOffset(data.northOffset);
+        setCalibrated(true);
+      }
+      if (data.objects) setSceneObjects(data.objects);
+
       // 1. Call React Three Fiber's cache clearing utility
+      useGLTF.clear(`/models/scene_textured.glb?v=${flipKey}`);
       useGLTF.clear("/models/scene_textured.glb");
 
       // 2. Increment state to force unmount & remount
@@ -1061,6 +1233,8 @@ export default function App() {
         };
         const boundsPayload = modelInfo?.bounds || fallbackBounds;
 
+        const effectiveMarkers = modelInfo?.boundaryMarkers || serverBoundaryMarkers;
+
         const res = await fetch(`${API}/api/recreation/plan`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1068,7 +1242,7 @@ export default function App() {
             prompt: promptText,
             apiKey: geminiApiKey || undefined,
             bounds: boundsPayload,
-            boundaryMarkers: modelInfo?.boundaryMarkers,
+            boundaryMarkers: effectiveMarkers,
             directionMeta: {
               direction: "N",
               northOffset: northOffset || 0,
@@ -1155,6 +1329,12 @@ export default function App() {
         useGLTF.clear("/models/scene_textured.glb");
         setModelUrl("/models/scene_textured.glb");
         setFlipKey((prev) => prev + 1);
+        if (data.boundaryMarkers) setServerBoundaryMarkers(data.boundaryMarkers);
+        if (data.northOffset !== undefined) {
+          setNorthOffset(data.northOffset);
+          setCalibrated(true);
+        }
+        if (data.objects) setSceneObjects(data.objects);
         fetchSceneObjects();
       }
       if (data.error || data.phase === "error") {
@@ -1436,7 +1616,7 @@ export default function App() {
                 <Suspense fallback={null}>
                   <ModelWithCamera
                     key={flipKey}
-                    url={modelUrlToLoad}
+                    url={`${modelUrlToLoad}?v=${flipKey}`}
                     controlsRef={controlsRef}
                     onModelInfo={setModelInfo}
                     northOffset={northOffset}
@@ -1450,7 +1630,7 @@ export default function App() {
                 <DirectionMarkers
                   markers={modelInfo?.boundaryMarkers}
                   northOffset={northOffset}
-                  target={sceneCenter}
+                  target={modelInfo?.center || sceneCenter}
                   radius={sceneRadius}
                   roomSize={modelInfo?.size}
                   onSelectDirection={alignCameraToDirection}
@@ -1458,33 +1638,63 @@ export default function App() {
               )}
 
               {/* In 3D Scene tab: show physical room anchors (doors, chairs, table) when enabled */}
-              {activeTab === "3d_scene" && showAnchors && sceneObjects.length > 0 && (
-                <group>
-                  {sceneObjects.map((obj) => (
-                    <SceneAnchorMarker key={obj.id} name={obj.id} anchor={obj} dummyScale={effectiveDummyScale} />
-                  ))}
-                </group>
-              )}
+              {activeTab === "3d_scene" && showAnchors && sceneObjects.length > 0 && (() => {
+                const needsTransform = sceneObjects.some(
+                  (o) => o?.pos && Math.abs(o.pos[0]) > ((modelInfo?.bounds?.max?.[0] || 3.0) + 1.5)
+                );
+                const content = sceneObjects.map((obj) => (
+                  <SceneAnchorMarker key={obj.id} name={obj.id} anchor={obj} dummyScale={effectiveDummyScale} />
+                ));
+                return needsTransform ? (
+                  <group
+                    position={modelInfo?.transform?.position || [0, 0, 0]}
+                    scale={modelInfo?.transform?.scale ? [modelInfo.transform.scale, modelInfo.transform.scale, modelInfo.transform.scale] : [1, 1, 1]}
+                  >
+                    {content}
+                  </group>
+                ) : (
+                  <group>{content}</group>
+                );
+              })()}
 
               {/* Forensic Crime Reenactment Simulation with Dummies - in recreation tab */}
-              {activeTab === "recreation" && (planData || sceneObjects.length > 0) && (
-                <ForensicSimulation
-                  plan={planData?.plan}
-                  anchors={planData?.anchors}
-                  physicalObjects={planData?.physicalObjects || sceneObjects}
-                  currentTime={currentTime}
-                  cameraMode={cameraMode}
-                  controlsRef={controlsRef}
-                  showRoutes={showRoutes}
-                  showLabels={showLabels}
-                  showAnchors={showAnchors}
-                  center={sceneCenter}
-                  radius={sceneRadius}
-                  roomHeight={roomHeight}
-                  roomSize={modelInfo?.size}
-                  dummyScale={effectiveDummyScale}
-                />
-              )}
+              {activeTab === "recreation" && (planData || sceneObjects.length > 0) && (() => {
+                // If simulation anchors were created in unscaled model space, apply model transform; otherwise render directly in world space
+                const simNeedsTransform = Boolean(
+                  modelInfo?.transform?.scale &&
+                  modelInfo.transform.scale !== 1.0 &&
+                  planData?.anchors?.chair_s?.pos &&
+                  Math.abs(planData.anchors.chair_s.pos[0]) > ((modelInfo?.bounds?.max?.[0] || 3.0) + 1.5)
+                );
+                const simContent = (
+                  <ForensicSimulation
+                    plan={planData?.plan}
+                    anchors={planData?.anchors}
+                    physicalObjects={planData?.physicalObjects || sceneObjects}
+                    currentTime={currentTime}
+                    cameraMode={cameraMode}
+                    controlsRef={controlsRef}
+                    showRoutes={showRoutes}
+                    showLabels={showLabels}
+                    showAnchors={showAnchors}
+                    center={modelInfo?.center || sceneCenter}
+                    radius={sceneRadius}
+                    roomHeight={roomHeight}
+                    roomSize={modelInfo?.size}
+                    dummyScale={effectiveDummyScale}
+                  />
+                );
+                return simNeedsTransform ? (
+                  <group
+                    position={modelInfo?.transform?.position || [0, 0, 0]}
+                    scale={modelInfo?.transform?.scale ? [modelInfo.transform.scale, modelInfo.transform.scale, modelInfo.transform.scale] : [1, 1, 1]}
+                  >
+                    {simContent}
+                  </group>
+                ) : (
+                  <group>{simContent}</group>
+                );
+              })()}
 
               {/* Simulation Clock & WebGL Canvas Link */}
               <SimulationClock

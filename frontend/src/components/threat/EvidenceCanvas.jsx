@@ -148,12 +148,7 @@ export default function EvidenceCanvas({ imageURL, apiData, hoveredLabel, onHove
 
     if (!results) return
 
-    // Blood polygons
-    for (const stain of blood?.stains ?? []) {
-      drawBloodPolygon(ctx, stain.polygon, sx, sy)
-    }
-
-    // Proximity lines (draw beneath boxes)
+    // Proximity lines (draw beneath boxes if valid stains exist)
     for (const obj of results) {
       if (obj.category === 'unaccounted') continue
       drawProximityLine(ctx, obj, blood?.stains, sx, sy)

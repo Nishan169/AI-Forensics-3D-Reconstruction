@@ -7,6 +7,7 @@ and determines the northOffset angle so the reference photo corresponds to the s
 import sys
 import os
 import json
+import math
 import numpy as np
 
 def calibrate_direction(reference_name=None, target_direction="N", base_dir=None):
@@ -47,10 +48,8 @@ def calibrate_direction(reference_name=None, target_direction="N", base_dir=None
             print(f"[calibrate_direction] Notice camera_poses.json: {e}")
             dust3r_poses = None
 
-    # [LEGACY / UNVISITED - Shifted from COLMAP to DUSt3R]
-    # COLMAP sparse reconstruction check preserved commented out for reference.
+    # Secondary / Fallback: COLMAP sparse reconstruction check
     rec = None
-    """
     if os.path.exists(colmap_dir):
         try:
             import pycolmap
@@ -60,7 +59,6 @@ def calibrate_direction(reference_name=None, target_direction="N", base_dir=None
         except Exception as e:
             print(f"[calibrate_direction] Notice pycolmap: {e}")
             rec = None
-    """
 
     if not dust3r_poses and rec is None:
         print(f"[calibrate_direction] Camera poses not found in {dust3r_poses_path}.")
@@ -118,12 +116,6 @@ def calibrate_direction(reference_name=None, target_direction="N", base_dir=None
             cam_pos_three = t
         method = "dust3r_camera_pose"
 
-    # =========================================================================
-    # [LEGACY / UNVISITED - Shifted from COLMAP to DUSt3R]
-    # The block below extracted poses from COLMAP pycolmap.Reconstruction.
-    # It is preserved commented out below for reference.
-    # =========================================================================
-    """
     elif rec is not None:
         found = None
         if reference_name:
@@ -156,11 +148,81 @@ def calibrate_direction(reference_name=None, target_direction="N", base_dir=None
             fwd_three = fwd
             cam_pos_three = cam_pos
         method = "colmap_camera_pose"
-    """
 
     # Compute azimuth on XZ plane
     cam_azimuth = float((np.degrees(np.arctan2(fwd_three[0], -fwd_three[2])) + 360.0) % 360.0)
     north_offset = float((cam_azimuth - target_angle + 360.0) % 360.0)
+
+    # Architectural alignment: snap northOffset to the physical wall perpendicular heading if mesh is available
+    glb_candidate = None
+    for cand_p in [
+        os.path.join(output_dir, "scene_textured.glb"),
+        os.path.join(base_dir, "frontend", "public", "models", "scene_textured.glb"),
+        os.path.join(base_dir, "frontend", "dist", "models", "scene_textured.glb"),
+    ]:
+        if os.path.exists(cand_p):
+            glb_candidate = cand_p
+            break
+
+    if glb_candidate:
+        try:
+            import trimesh
+            mesh = trimesh.load(glb_candidate, force='mesh')
+            v_pts = np.array(mesh.vertices, dtype=np.float64)
+            best_alpha = None
+
+            # 1. Consensus voting via wall surface normals (preferred for high accuracy)
+            if hasattr(mesh, 'vertex_normals') and len(mesh.vertex_normals) > 0:
+                norms = np.array(mesh.vertex_normals, dtype=np.float64)
+                p5_y, p95_y = np.percentile(v_pts[:, 1], [5, 95])
+                wall_mask = (v_pts[:, 1] > p5_y + 0.3) & (v_pts[:, 1] < p95_y - 0.3) & (np.abs(norms[:, 1]) < 0.30)
+                if np.sum(wall_mask) >= 50:
+                    pt_norms = norms[wall_mask]
+                    best_score = -1
+                    for a in np.arange(0, 90, 0.25):
+                        rad = math.radians(a)
+                        cos_a, sin_a = math.cos(rad), math.sin(rad)
+                        nx_rot = pt_norms[:, 0] * cos_a + pt_norms[:, 2] * sin_a
+                        nz_rot = -pt_norms[:, 0] * sin_a + pt_norms[:, 2] * cos_a
+                        score = np.sum(np.maximum(np.abs(nx_rot), np.abs(nz_rot)) > 0.94)
+                        if score > best_score:
+                            best_score = score
+                            best_alpha = float(a)
+
+            # 2. Fallback: floor perimeter 2D bounding box area minimization
+            if best_alpha is None:
+                p5_y = np.percentile(v_pts[:, 1], 5)
+                flr_pts = v_pts[v_pts[:, 1] < p5_y + 0.35]
+                if len(flr_pts) < 100:
+                    flr_pts = v_pts
+                best_area = 1e9
+                for a in np.linspace(0, 90, 180, endpoint=False):
+                    rad = math.radians(a)
+                    c, s = math.cos(rad), math.sin(rad)
+                    u_tmp = flr_pts[:, 0] * c + flr_pts[:, 2] * s
+                    v_tmp = -flr_pts[:, 0] * s + flr_pts[:, 2] * c
+                    span_u = np.percentile(u_tmp, 99.0) - np.percentile(u_tmp, 1.0)
+                    span_v = np.percentile(v_tmp, 99.0) - np.percentile(v_tmp, 1.0)
+                    area = span_u * span_v
+                    if area < best_area:
+                        best_area = area
+                        best_alpha = float(a)
+
+            if best_alpha is not None:
+                raw_target_heading = float((cam_azimuth - target_angle + 360.0) % 360.0)
+                candidates = [(best_alpha + k * 90.0) % 360.0 for k in range(4)]
+                def ang_diff(a1, a2):
+                    return abs((a1 - a2 + 180.0) % 360.0 - 180.0)
+
+                best_heading = min(candidates, key=lambda c: ang_diff(c, raw_target_heading))
+                # Each wall covers a 90° quadrant (±45°), snap to closest wall normal
+                if ang_diff(best_heading, raw_target_heading) <= 45.0:
+                    north_offset = round(float(best_heading), 2)
+                    print(f"[calibrate_direction] Snapped northOffset to physical wall outward normal: {north_offset}° (diff: {ang_diff(best_heading, raw_target_heading):.2f}°)")
+                else:
+                    north_offset = round(float(raw_target_heading), 2)
+        except Exception as e:
+            print(f"[calibrate_direction] Notice aligning with wall geometry: {e}")
 
     d.update({
         "direction": target_direction.upper(),
@@ -179,6 +241,15 @@ def calibrate_direction(reference_name=None, target_direction="N", base_dir=None
     os.makedirs(output_dir, exist_ok=True)
     with open(dir_file, "w") as f:
         json.dump(d, f, indent=2)
+
+    import shutil
+    for dest_dir in [os.path.join(base_dir, "frontend", "public", "models"),
+                     os.path.join(base_dir, "frontend", "dist", "models")]:
+        if os.path.exists(dest_dir):
+            try:
+                shutil.copy2(dir_file, os.path.join(dest_dir, "direction.json"))
+            except Exception:
+                pass
 
     print(f"[calibrate_direction] ({method}) Ref: '{found_name}' facing {target_direction} -> camAzimuth = {cam_azimuth:.2f}°, northOffset = {north_offset:.2f}°")
     return d

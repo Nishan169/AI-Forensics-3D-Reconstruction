@@ -21,7 +21,7 @@ def main():
     root = Path(__file__).resolve().parent
     # Default to DUSt3R neural reconstruction (primary engine)
     dust3r_script = root / "reconstruct_dust3r.py"
-    if dust3r_script.exists():
+    if dust3r_script.exists() and not args.colmap:
         try:
             import reconstruct_dust3r
             return reconstruct_dust3r.main()
@@ -30,13 +30,7 @@ def main():
             cmd = [sys.executable, str(dust3r_script)] + sys.argv[1:]
             return subprocess.run(cmd, check=True).returncode
 
-    # =========================================================================
-    # [LEGACY / UNVISITED - Shifted from COLMAP + OpenMVS to DUSt3R]
-    # The block below was the original photogrammetry SfM pipeline.
-    # It required local binaries: colmap, InterfaceCOLMAP, DensifyPointCloud,
-    # ReconstructMesh, and TextureMesh. It is preserved below commented out for reference.
-    # =========================================================================
-    """
+    # COLMAP + OpenMVS SfM pipeline
     image_dir = Path(args.images).expanduser()
     if not image_dir.is_absolute():
         image_dir = root / image_dir
@@ -52,8 +46,9 @@ def main():
                  "ReconstructMesh", "TextureMesh"]:
         tool(name)
 
-    colmap = root / "output" / "colmap"
-    mvs = root / "output" / "openmvs"
+    out = root / "output"
+    colmap = out / "colmap"
+    mvs = out / "openmvs"
     models = root / "frontend" / "public" / "models"
 
     for d in [colmap, mvs]:
@@ -191,79 +186,8 @@ def main():
     print(f"[deploy] Enhanced textured mesh deployed to frontend "
           f"({len(tex_candidates)} texture file(s)).", flush=True)
 
-    # Canonical Axis-Alignment and export room_bounds.json
-    try:
-        import trimesh, json, numpy as np
-        scene_mesh = trimesh.load(str(dest_glb), process=False)
-        bounds_json = out / "room_bounds.json"
-        
-        # 1. Convert to trimesh object
-        if isinstance(scene_mesh, trimesh.Scene):
-            mesh = scene_mesh.dump(concatenate=True)
-            if isinstance(mesh, list):
-                mesh = mesh[0]
-        else:
-            mesh = scene_mesh
-
-        pts = mesh.vertices
-
-        # 1. ROBUST CENTERING (Ignores floaters completely)
-        med_x = np.median(pts[:, 0])
-        med_z = np.median(pts[:, 2])
-        floor_y = np.percentile(pts[:, 1], 5)
-        mesh.apply_translation([-med_x, -floor_y, -med_z])
-
-        # 2. YAW ROTATION (Align walls to grid)
-        pts = mesh.vertices
-        distances = np.linalg.norm(pts[:, [0,2]], axis=1)
-        core_pts = pts[distances < np.percentile(distances, 80)]
-
-        if len(core_pts) > 10:
-            cov = np.cov(core_pts[:, [0, 2]].T)
-            evals, evecs = np.linalg.eig(cov)
-            primary = evecs[:, np.argmax(evals)]
-            angle = np.arctan2(primary[1], primary[0])
-            rot_matrix = trimesh.transformations.rotation_matrix(-angle, [0, 1, 0])
-            mesh.apply_transform(rot_matrix)
-
-        # 3. UNIFORM SCALING (Fit to the fixed stage)
-        pts = mesh.vertices
-        min_x, max_x = np.percentile(pts[:, 0], [5, 95])
-        min_z, max_z = np.percentile(pts[:, 2], [5, 95])
-
-        max_dim = max(max_x - min_x, max_z - min_z)
-        TARGET_SIZE = 10.0
-        scale_factor = TARGET_SIZE / max_dim if max_dim > 0 else 1.0
-
-        scale_matrix = trimesh.transformations.scale_matrix(scale_factor)
-        mesh.apply_transform(scale_matrix)
-
-        mesh.export(str(dest_glb))
-
-        # 4. THE FIXED STAGE (Hardcoded Markers)
-        F = 5.5
-
-        bounds_data = {
-            "NW": [-F, 0.0, -F],
-            "NE": [ F, 0.0, -F],
-            "SW": [-F, 0.0,  F],
-            "SE": [ F, 0.0,  F],
-            "N":  [ 0.0, 0.0, -F],
-            "S":  [ 0.0, 0.0,  F],
-            "E":  [ F, 0.0,   0.0],
-            "W":  [-F, 0.0,   0.0]
-        }
-
-        with open(bounds_json, "w", encoding="utf-8") as f:
-            json.dump(bounds_data, f, indent=4)
-        shutil.copy2(dest_glb, models / "scene_textured.glb")
-        shutil.copy2(bounds_json, models / "room_bounds.json")
-        if dist_models.exists():
-            shutil.copy2(dest_glb, dist_models / "scene_textured.glb")
-            shutil.copy2(bounds_json, dist_models / "room_bounds.json")
-        print(f"[RoomBounds] Saved canonical axis-aligned bounds to: {bounds_json}", flush=True)
-    except Exception as be:
-        print(f"[RoomBounds] Notice: {be}", flush=True)
+    # Mirror enhanced GLB to output directory
+    shutil.copy2(dest_glb, out / "scene_textured.glb")
 
     # Automatically compute true compass northOffset from reference camera pose
     calib_script = root / "scripts" / "calibrate_direction.py"
@@ -273,20 +197,37 @@ def main():
             print("[direction] Calibrating compass northOffset from reference camera pose...", flush=True)
             import subprocess
             uv_path = shutil.which("uv")
-            calib_cmd = [uv_path, "run", "--with", "pycolmap", "python3", str(calib_script)] if os.path.exists(uv_path) else [sys.executable, str(calib_script)]
+            calib_cmd = [uv_path, "run", "--with", "pycolmap", "python3", str(calib_script)] if uv_path and os.path.exists(uv_path) else [sys.executable, str(calib_script)]
             subprocess.run(calib_cmd, cwd=str(root), check=False)
             
             if detect_script.exists():
                 print("[objects] Dynamically detecting room boundaries, doors, and furniture...", flush=True)
-                detect_cmd = [uv_path, "run", "--with", "pycolmap", "--with", "trimesh", "--with", "scipy", "python3", str(detect_script)] if os.path.exists(uv_path) else [sys.executable, str(detect_script)]
+                detect_cmd = [uv_path, "run", "--with", "pycolmap", "--with", "trimesh", "--with", "scipy", "python3", str(detect_script)] if uv_path and os.path.exists(uv_path) else [sys.executable, str(detect_script)]
                 subprocess.run(detect_cmd, cwd=str(root), check=False)
         except Exception as e:
             print(f"[direction] Notice: {e}", flush=True)
 
+    # Synchronize all generated output artifacts to frontend models directories
+    sync_files = [
+        "scene_textured.glb",
+        "boundary_markers.json",
+        "direction.json",
+        "scene_objects.json",
+        "navgrid.json",
+        "camera_poses.json",
+        "room_bounds.json"
+    ]
+    for dest_dir in [models, dist_models]:
+        if dest_dir.exists():
+            for fname in sync_files:
+                src_f = out / fname
+                if src_f.exists():
+                    shutil.copy2(src_f, dest_dir / fname)
+            print(f"[Reconstruct Deploy] Synchronized pipeline artifacts to: {dest_dir.name}", flush=True)
+
     print("\nDONE.")
     print("Model:", dest_glb)
     print("Run the viewer with: cd frontend && npm run dev")
-    """
     return 0
 
 if __name__ == "__main__":

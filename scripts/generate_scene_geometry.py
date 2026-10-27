@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """
-[DEPRECATED / SUPERSEDED - Replaced by scripts/detect_scene_objects.py]
-====================================================================
-Early prototype script for room obstacle detection under the legacy OpenMVS pipeline.
-The active production pipeline now uses `scripts/detect_scene_objects.py`, which supports
-local floor plane fitting, dynamic wall boundary detection, and robust 8-direction labeling.
+Dynamic 3D Room Object & Obstacle Generator.
 
-Preserved commented out below for reference.
+Analyzes the reconstructed 3D mesh (matching Three.js centering and scale):
+1. Detects exact floor walkways and furniture/wall obstacles from 3D geometry.
+2. Places cardinal chairs and doors strictly INSIDE the physical room boundary.
+3. Rasterizes the actual room obstacles (beds, tables, walls) into output/navgrid.json
+   so pathfinding routes strictly through walkable floor corridors and NEVER crosses furniture.
 """
 
-"""
 import os
 import json
 import math
@@ -306,7 +305,6 @@ def generate_scene_geometry():
         json.dump(detected_objects, f, indent=2)
 
     print(f"[generate_scene_geometry] Generated {len(detected_objects)} dynamic room objects to {objects_file}")
-"""
 
 if __name__ == "__main__":
-    print("[generate_scene_geometry] Notice: Superseded by scripts/detect_scene_objects.py.")
+    generate_scene_geometry()

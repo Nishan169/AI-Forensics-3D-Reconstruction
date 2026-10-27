@@ -205,6 +205,55 @@ export class NavGrid {
   }
 
   /**
+   * Finds the closest walkable floor position adjacent to target (pt).
+   * If target is inside an obstacle (e.g. victim sitting on a chair/bed),
+   * returns the closest walkable cell adjacent to the obstacle, biased towards fromPos.
+   */
+  getClosestWalkablePosition(pt, fromPos = null) {
+    const centerCell = this._ij(pt);
+    const [cx, cz] = centerCell;
+    const centerKey = cx + cz * this.nx;
+    if (!this.obs[centerKey]) {
+      const [wx, wz] = this._xz(cx, cz);
+      if (this.isInsideFloor(wx, wz, 0.08)) {
+        return [Number(pt[0]), Number(pt[1])];
+      }
+    }
+
+    let bestPos = null;
+    let bestScore = Infinity;
+
+    for (let rad = 1; rad <= 35; rad++) {
+      for (let dz = -rad; dz <= rad; dz++) {
+        for (let dx = -rad; dx <= rad; dx++) {
+          if (Math.abs(dx) !== rad && Math.abs(dz) !== rad) continue;
+          const xx = cx + dx, zz = cz + dz;
+          if (xx < 0 || xx >= this.nx || zz < 0 || zz >= this.nz) continue;
+          if (this.obs[xx + zz * this.nx]) continue;
+
+          const [wx, wz] = this._xz(xx, zz);
+          if (!this.isInsideFloor(wx, wz, 0.08)) continue;
+
+          const dTarget = Math.hypot(wx - pt[0], wz - pt[1]);
+          let score = dTarget;
+          if (fromPos) {
+            const dFrom = Math.hypot(wx - fromPos[0], wz - fromPos[1]);
+            score += dFrom * 0.15;
+          }
+
+          if (score < bestScore) {
+            bestScore = score;
+            bestPos = [Number(wx.toFixed(3)), Number(wz.toFixed(3))];
+          }
+        }
+      }
+      if (bestPos && rad >= 3) break;
+    }
+
+    return bestPos || this.getFreePosition(pt);
+  }
+
+  /**
    * Computes the bounding box and center of all walkable cells in the room.
    */
   getWalkableBounds() {
@@ -274,17 +323,23 @@ export class NavGrid {
     }
 
     if (bm && bm.NW && bm.NE && bm.SE && bm.SW) {
-      const markersFit = [bm.NW, bm.NE, bm.SE, bm.SW].every(pt => {
+      const markerKeys = ["NW", "N", "NE", "E", "SE", "S", "SW", "W"].filter(k => bm[k]);
+      const markers = markerKeys.map(k => bm[k]);
+      const markersFit = markers.every(pt => {
         return pt[0] >= minX - 0.75 && pt[0] <= maxX + 0.75 &&
                pt[2] >= minZ - 0.75 && pt[2] <= maxZ + 0.75;
       });
-      if (markersFit) {
-        poly = [
-          [bm.NW[0], bm.NW[2]],
-          [bm.NE[0], bm.NE[2]],
-          [bm.SE[0], bm.SE[2]],
-          [bm.SW[0], bm.SW[2]]
-        ];
+      if (markersFit && markers.length >= 4) {
+        const cx = markers.reduce((s, p) => s + p[0], 0) / markers.length;
+        const cz = markers.reduce((s, p) => s + p[2], 0) / markers.length;
+        poly = markers.map(pt => {
+          const dx = pt[0] - cx, dz = pt[2] - cz;
+          const dist = Math.hypot(dx, dz) || 1.0;
+          return [
+            Number((pt[0] + (dx / dist) * 1.0).toFixed(3)),
+            Number((pt[2] + (dz / dist) * 1.0).toFixed(3))
+          ];
+        });
       }
     }
 
@@ -507,7 +562,7 @@ export class NavGrid {
 
       const fromY = this.getFloorY(prevX, prevZ);
       const toY = this.getFloorY(x, z);
-      if (Math.abs(toY - fromY) > 0.12) return false;
+      if (Math.abs(toY - fromY) > 0.18) return false;
 
       prevX = x;
       prevZ = z;
@@ -521,9 +576,16 @@ export class NavGrid {
    */
   path(a, b) {
     const clampedA = this.clampToFloor(a, 0.20);
-    const clampedB = this.clampToFloor(b, 0.20);
+    let clampedB = this.clampToFloor(b, 0.20);
     const pA = [Number(clampedA[0]), Number(clampedA[1])];
-    const pB = [Number(clampedB[0]), Number(clampedB[1])];
+    let pB = [Number(clampedB[0]), Number(clampedB[1])];
+
+    // If destination is inside an obstacle (e.g. bed/table/chair), route to closest walkable floor position
+    const destCell = this._ij(pB);
+    if (this.obs[destCell[0] + destCell[1] * this.nx]) {
+      pB = this.getClosestWalkablePosition(pB, pA);
+    }
+
     const dDirect = Math.hypot(pB[0] - pA[0], pB[1] - pA[1]);
     if (dDirect < 0.1) return [pA, pB];
 
@@ -577,11 +639,11 @@ export class NavGrid {
         const toY = this.getFloorY(xx, zz);
         const deltaY = Math.abs(toY - fromY);
 
-        // Strict step-height rejection: cannot step over heights > 12cm (furniture/curbs)
-        if (deltaY > 0.12) continue;
+        // Strict step-height rejection: cannot step over heights > 22cm (furniture/solid structures)
+        if (deltaY > 0.22) continue;
 
         // Smooth elevation penalty:
-        const elevationPenalty = deltaY * 40.0;
+        const elevationPenalty = deltaY * 20.0;
         const tentative = cg + cost + elevationPenalty;
 
         if (tentative < gScore[nKey]) {
@@ -739,8 +801,7 @@ export class NavGrid {
       }
     }
 
-    // [LEGACY / UNVISITED - Shifted from OpenMVS cloud.bin to neural navgrid.json]
-    /*
+    // Fallback: Check for legacy OpenMVS cloud.bin if navgrid.json is absent
     const searchDirs = [
       customPath,
       path.resolve(process.cwd(), "output/openmvs"),
@@ -763,7 +824,6 @@ export class NavGrid {
         }
       }
     }
-    */
 
     return null;
   }
@@ -808,42 +868,35 @@ export class NavGrid {
       obs[(nx - 1) + z * nx] = 1;
     }
 
-    // 2. Stamp furniture footprints from anchors
+    // 2. Stamp real physical furniture footprints from anchors (tables, desks, beds, couches)
     for (const [name, anc] of Object.entries(anchors)) {
       if (!anc || !anc.pos) continue;
-      const type = anc.type;
-      const [px, pz] = anc.pos;
+      const type = (anc.type || "").toLowerCase();
+      const id = (name || anc.id || "").toLowerCase();
+      // Never stamp synthetic directional chairs or door/window portals as obstacles
+      if (type === "chair" || id.startsWith("chair_") || type === "door" || type === "entrance" || type === "exit" || type === "window") continue;
 
+      const [px, pz] = anc.pos;
       if (type === "desk") {
-        stampBox(px, pz, 0.8, 0.5);
+        stampBox(px, pz, 0.65, 0.45);
       } else if (type === "table") {
-        stampBox(px, pz, 1.0, 0.7);
+        const halfW = (anc.size?.[0] ? Math.min(0.65, anc.size[0] / 2 + 0.12) : 0.60);
+        const halfH = (anc.size?.[1] ? Math.min(0.45, anc.size[1] / 2 + 0.12) : 0.40);
+        stampBox(px, pz, halfW, halfH);
       } else if (type === "couch" || type === "sofa") {
-        stampBox(px, pz, 1.1, 0.55);
+        stampBox(px, pz, 0.90, 0.50);
       } else if (type === "bed") {
-        stampBox(px, pz, 1.2, 0.95);
-      } else if (type === "chair") {
-        stampBox(px, pz, 0.38, 0.38);
-      }
-    }
-
-    // Only stamp central living room table if it is an actual physical object in anchors
-    for (const [name, anc] of Object.entries(anchors)) {
-      if (!anc || !anc.pos) continue;
-      const type = anc.type;
-      const [px, pz] = anc.pos;
-      if (type === "table") {
-        stampBox(px, pz, (anc.size?.[0] ? anc.size[0] / 2 : 0.8), (anc.size?.[1] ? anc.size[1] / 2 : 0.55));
+        stampBox(px, pz, 1.05, 0.80);
       }
     }
 
     // 3. Clear openings around doors and exits
     for (const anc of Object.values(anchors)) {
-      if (anc.type === "door" || anc.type === "exit" || anc.type === "window") {
+      if (anc.type === "door" || anc.type === "exit") {
         const ix = Math.floor((anc.pos[0] - loX) / cell);
         const iz = Math.floor((anc.pos[1] - loZ) / cell);
-        for (let dz = -3; dz <= 3; dz++) {
-          for (let dx = -3; dx <= 3; dx++) {
+        for (let dz = -2; dz <= 2; dz++) {
+          for (let dx = -2; dx <= 2; dx++) {
             const xx = ix + dx, zz = iz + dz;
             if (xx >= 0 && xx < nx && zz >= 0 && zz < nz) {
               obs[xx + zz * nx] = 0;
@@ -894,12 +947,19 @@ export class NavGrid {
     }
     if (!bm || !bm.NW || !bm.NE || !bm.SE || !bm.SW) return;
 
-    const poly = [
-      [bm.NW[0], bm.NW[2]],
-      [bm.NE[0], bm.NE[2]],
-      [bm.SE[0], bm.SE[2]],
-      [bm.SW[0], bm.SW[2]]
-    ];
+    const markerKeys = ["NW", "N", "NE", "E", "SE", "S", "SW", "W"].filter(k => bm[k]);
+    const markers = markerKeys.map(k => bm[k]);
+    if (markers.length < 4) return;
+    const cx = markers.reduce((s, p) => s + p[0], 0) / markers.length;
+    const cz = markers.reduce((s, p) => s + p[2], 0) / markers.length;
+    const poly = markers.map(pt => {
+      const dx = pt[0] - cx, dz = pt[2] - cz;
+      const dist = Math.hypot(dx, dz) || 1.0;
+      return [
+        Number((pt[0] + (dx / dist) * 1.0).toFixed(3)),
+        Number((pt[2] + (dz / dist) * 1.0).toFixed(3))
+      ];
+    });
 
     const isInside = (pt) => {
       const x = pt[0], y = pt[1];
@@ -952,38 +1012,27 @@ export class NavGrid {
       if (type === "door" || type === "entrance" || type === "exit" || type === "window" || type === "center") continue;
       if (id.includes("door") || id.includes("entrance") || id.includes("exit") || id.includes("window")) continue;
 
-      // If synthetic directional chair and not an active occupied target, do NOT stamp as solid obstacle
-      if (type === "chair" && id.startsWith("chair_") && id !== "chair_center") {
-        const isOccupied = obj.occupied || (anchors && anchors[obj.id]?.occupied);
-        if (!isOccupied) continue;
-      }
-
-      // If chair is close to a doorway, do not block the door corridor
-      if (type === "chair" && doors.some(d => Math.hypot(d.pos[0] - obj.pos[0], d.pos[1] - obj.pos[1]) < 0.75)) {
-        continue;
-      }
+      // Never stamp synthetic directional chairs or actor placement anchors as solid obstacles
+      if (type === "chair" || id.startsWith("chair_")) continue;
 
       const [px, pz] = obj.pos;
       let halfW = 0.45, halfH = 0.45;
 
       if (type === "desk") {
-        halfW = Math.max(0.75, (obj.size?.[0] ? obj.size[0] / 2 : 0.65) + 0.12);
-        halfH = Math.max(0.55, (obj.size?.[1] ? obj.size[1] / 2 : 0.45) + 0.12);
+        halfW = Math.max(0.65, (obj.size?.[0] ? obj.size[0] / 2 : 0.55) + 0.15);
+        halfH = Math.max(0.45, (obj.size?.[1] ? obj.size[1] / 2 : 0.40) + 0.15);
       } else if (type === "table") {
-        halfW = Math.max(0.70, (obj.size?.[0] ? obj.size[0] / 2 : 0.60) + 0.12);
-        halfH = Math.max(0.50, (obj.size?.[1] ? obj.size[1] / 2 : 0.45) + 0.12);
+        halfW = Math.max(0.60, (obj.size?.[0] ? obj.size[0] / 2 : 0.50) + 0.15);
+        halfH = Math.max(0.40, (obj.size?.[1] ? obj.size[1] / 2 : 0.40) + 0.15);
       } else if (type === "couch" || type === "sofa") {
-        halfW = Math.max(1.05, (obj.size?.[0] ? obj.size[0] / 2 : 0.90) + 0.15);
-        halfH = Math.max(0.65, (obj.size?.[1] ? obj.size[1] / 2 : 0.50) + 0.15);
+        halfW = Math.max(0.95, (obj.size?.[0] ? obj.size[0] / 2 : 0.80) + 0.15);
+        halfH = Math.max(0.55, (obj.size?.[1] ? obj.size[1] / 2 : 0.45) + 0.15);
       } else if (type === "bed") {
-        halfW = Math.max(1.15, (obj.size?.[0] ? obj.size[0] / 2 : 0.95) + 0.15);
-        halfH = Math.max(0.95, (obj.size?.[1] ? obj.size[1] / 2 : 0.75) + 0.15);
-      } else if (type === "chair") {
-        halfW = 0.32;
-        halfH = 0.32;
+        halfW = Math.max(1.05, (obj.size?.[0] ? obj.size[0] / 2 : 0.90) + 0.15);
+        halfH = Math.max(0.85, (obj.size?.[1] ? obj.size[1] / 2 : 0.70) + 0.15);
       } else {
-        halfW = Math.max(0.45, (obj.size?.[0] ? obj.size[0] / 2 : 0.35) + 0.12);
-        halfH = Math.max(0.45, (obj.size?.[1] ? obj.size[1] / 2 : 0.35) + 0.12);
+        halfW = Math.max(0.40, (obj.size?.[0] ? obj.size[0] / 2 : 0.30) + 0.12);
+        halfH = Math.max(0.40, (obj.size?.[1] ? obj.size[1] / 2 : 0.30) + 0.12);
       }
 
       this.stampBox(px, pz, halfW, halfH);
@@ -994,7 +1043,8 @@ export class NavGrid {
       if (!obj || !obj.pos) continue;
       const type = (obj.type || "").toLowerCase();
       const id = (obj.id || "").toLowerCase();
-      if (type === "door" || type === "entrance" || type === "exit" || type === "window" || id.includes("door") || id.includes("entrance")) {
+      // Only actual entrance doors/thresholds clear the doorway portal (NEVER windows or general furniture)
+      if (type === "door" || type === "entrance" || type === "exit" || id.includes("door") || id.includes("entrance")) {
         const [px, pz] = obj.pos;
         const inw = obj.inward || [0, 0];
         this.clearBox(px, pz, 0.25, 0.25);
@@ -1053,15 +1103,23 @@ export class NavGrid {
           const gridCenterX = (gridMinX + gridMaxX) / 2;
           const gridCenterZ = (gridMinZ + gridMaxZ) / 2;
 
-          const centerDiff = Math.hypot(gridCenterX - bCenterX, gridCenterZ - bCenterZ);
-          // Check spatial overlap between cached active grid and room bounds
-          const overlaps = (gridMinX < bMaxX && gridMaxX > bMinX && gridMinZ < bMaxZ && gridMaxZ > bMinZ);
-          const reasonableCenter = centerDiff < 2.2;
+          const bSpanX = Math.max(0.1, bMaxX - bMinX);
+          const bSpanZ = Math.max(0.1, bMaxZ - bMinZ);
+          const gridSpanX = gridMaxX - gridMinX;
+          const gridSpanZ = gridMaxZ - gridMinZ;
+          const sizeRatioX = gridSpanX / bSpanX;
+          const sizeRatioZ = gridSpanZ / bSpanZ;
+          const reasonableSpan = sizeRatioX >= 0.70 && sizeRatioX <= 1.40 && sizeRatioZ >= 0.70 && sizeRatioZ <= 1.40;
 
-          if (reasonableCenter && overlaps) {
+          const centerDiff = Math.hypot(gridCenterX - bCenterX, gridCenterZ - bCenterZ);
+          // Check spatial overlap and scale compatibility between cached active grid and room bounds
+          const overlaps = (gridMinX < bMaxX && gridMaxX > bMinX && gridMinZ < bMaxZ && gridMaxZ > bMinZ);
+          const reasonableCenter = centerDiff < 2.0;
+
+          if (reasonableCenter && overlaps && reasonableSpan) {
             useActive = true;
           } else {
-            console.log(`[NavGrid] Cached active grid (${gridMinX.toFixed(2)}..${gridMaxX.toFixed(2)}, ${gridMinZ.toFixed(2)}..${gridMaxZ.toFixed(2)}) is incompatible with active model bounds (${bMinX.toFixed(2)}..${bMaxX.toFixed(2)}, ${bMinZ.toFixed(2)}..${bMaxZ.toFixed(2)}). Building fresh grid sized to active model bounds.`);
+            console.log(`[NavGrid] Cached active grid (${gridMinX.toFixed(2)}..${gridMaxX.toFixed(2)}, ${gridMinZ.toFixed(2)}..${gridMaxZ.toFixed(2)}, span ${gridSpanX.toFixed(2)}x${gridSpanZ.toFixed(2)}) is incompatible with active model bounds (span ${bSpanX.toFixed(2)}x${bSpanZ.toFixed(2)}). Building fresh grid sized to active model bounds.`);
           }
         }
       }

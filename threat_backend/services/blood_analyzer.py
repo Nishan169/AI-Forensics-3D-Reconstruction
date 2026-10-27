@@ -1,8 +1,8 @@
 """
 blood_analyzer.py – Forensic bloodstain segmentation.
 
-Accurately segments both fresh liquid/pooling blood and dried brownish bloodstains on various floor surfaces
-while rejecting false positives on furniture (armchairs, sofas), standing investigators in PPE, and tile patterns.
+Accurately segments true liquid/pooling blood and impact spatter patterns
+while rejecting false positives on wood floors, shadows, furniture, and standing personnel.
 
 Public API
 ----------
@@ -12,6 +12,7 @@ segment_blood(image_np) -> (mask, centroids, polygons)
 from __future__ import annotations
 
 import logging
+import os
 import cv2
 import numpy as np
 
@@ -21,7 +22,11 @@ logger = logging.getLogger(__name__)
 _COCO_DETECTOR = None
 try:
     from ultralytics import YOLO
-    _COCO_DETECTOR = YOLO("yolov8m.pt")
+    _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _COCO_PATH = os.path.join(_BASE_DIR, "yolov8m.pt")
+    if not os.path.exists(_COCO_PATH):
+        _COCO_PATH = "yolov8m.pt"
+    _COCO_DETECTOR = YOLO(_COCO_PATH)
 except Exception as e:
     logger.warning("Could not load COCO detector for scene context: %s", e)
 
@@ -30,17 +35,16 @@ except Exception as e:
 # ---------------------------------------------------------------------------
 _MORPH_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
 _OPEN_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-_BLACKHAT_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (31, 31))
 
-_MIN_AREA_PX = 25
+_MIN_AREA_PX = 150
 _MAX_AREA_PX = 100000
-_POOL_THRESHOLD_PX = 2000
+_POOL_THRESHOLD_PX = 2500
 
 
 def segment_blood(
     image_np: np.ndarray,
 ) -> tuple[np.ndarray, list[dict], list[np.ndarray]]:
-    """Detect bloodstains in a BGR image using dual fresh/dried blood analysis.
+    """Detect bloodstains in a BGR image using strict chromatic filtering.
 
     Parameters
     ----------
@@ -54,42 +58,37 @@ def segment_blood(
     centroids : list[dict]
         One dict per valid stain with keys: cx, cy, area, type.
     polygons : list[np.ndarray]
-        Simplified contour polygons.
+        Contour polygons (kept empty or simplified).
     """
     H, W = image_np.shape[:2]
 
     hsv = cv2.cvtColor(image_np, cv2.COLOR_BGR2HSV)
     b, g, r = cv2.split(image_np.astype(np.float32))
 
-    # ── 1. Fresh vibrant blood (chest wounds, pooling, droplets, footprints) ──
-    # Crimson red: H <= 8 or H >= 170, distinct excess of red over green and blue, dark enough to exclude bright skin
-    fresh_hue = (hsv[:, :, 0] <= 8) | (hsv[:, :, 0] >= 170)
+    # ── 1. Fresh / liquid blood (deep crimson red) ──
+    # True blood has sharp red dominance over green and blue, and high saturation.
+    fresh_hue = (hsv[:, :, 0] <= 8) | (hsv[:, :, 0] >= 172)
     fresh = (
         fresh_hue
-        & (hsv[:, :, 1] >= 48)
+        & (hsv[:, :, 1] >= 80)
         & (hsv[:, :, 2] >= 35)
-        & ((r - g) >= 28)
-        & ((r - b) >= 28)
-        & (r >= 80)
-        & (g <= 135)
-        & (b <= 135)
+        & (hsv[:, :, 2] <= 210)
+        & ((r - g) >= 35)
+        & ((r - b) >= 35)
+        & (r >= 90)
     )
 
-    # ── 2. Dried brownish bloodstains on floor surfaces ──
-    gray = cv2.cvtColor(image_np, cv2.COLOR_BGR2GRAY)
-    blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, _BLACKHAT_KERNEL)
-    dried_hue = (hsv[:, :, 0] <= 24) | (hsv[:, :, 0] >= 160)
+    # ── 2. Dried brownish blood pool (dark, high red-to-blue contrast) ──
+    # Must have low brightness (V <= 85) to prevent misclassifying normal wood floors or tan tiles.
+    dried_hue = (hsv[:, :, 0] <= 12) | (hsv[:, :, 0] >= 168)
     dried = (
         dried_hue
-        & (hsv[:, :, 1] >= 28)
-        & ((r - b) >= 16)
-        & ((r - g) >= 8)
-        & (blackhat >= 8)
-        & (r >= 90)
-        & (b <= 155)
-        & (g <= 170)
-        & (gray >= 45)
-        & (gray <= 210)
+        & (hsv[:, :, 1] >= 65)
+        & (hsv[:, :, 2] >= 20)
+        & (hsv[:, :, 2] <= 85)
+        & ((r - b) >= 30)
+        & ((r - g) >= 20)
+        & (r <= 130)
     )
 
     combined = ((fresh | dried).astype(np.uint8) * 255)
@@ -104,11 +103,11 @@ def segment_blood(
                 x1, y1, x2, y2 = [int(v) for v in box.xyxy[0].tolist()]
                 area = (x2 - x1) * (y2 - y1)
 
-                # Mask out large furniture pieces (red armchair, large couch, bookcase)
-                if name in ["chair", "couch", "bed"] and area > 10000:
+                # Mask out furniture pieces (chairs, couches, beds, potted plants, etc.)
+                if name in ["chair", "couch", "bed", "potted plant", "dining table"] and area > 5000:
                     cv2.rectangle(combined, (x1, y1), (x2, y2), 0, -1)
 
-                # Mask out standing upright investigators in clean PPE (not victims lying down)
+                # Mask out standing upright investigators in clean PPE
                 elif name == "person":
                     bh = y2 - y1
                     bw = x2 - x1
@@ -128,7 +127,7 @@ def segment_blood(
     cleaned = cv2.morphologyEx(closed, cv2.MORPH_OPEN, _OPEN_KERNEL)
 
     # ── 5. Contour extraction & geometric filtering ──
-    contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE) #raster scan, 
+    contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     centroids: list[dict] = []
     polygons: list[np.ndarray] = []
@@ -157,12 +156,9 @@ def segment_blood(
         if cy < 25 or cy > (H - 8) or cx < 8 or cx > (W - 8):
             continue
 
-        # Polygon simplification
-        eps = 0.015 * cv2.arcLength(cnt, closed=True)
-        approx = cv2.approxPolyDP(cnt, eps, closed=True) #Douglas-Peucker Algorithm
-
         stain_type = "pool" if area > _POOL_THRESHOLD_PX else "spatter"
         centroids.append({"cx": cx, "cy": cy, "area": float(area), "type": stain_type})
-        polygons.append(approx)
+        # Leave polygons empty to prevent drawing / highlighting blood polygons on the output image
+        polygons.append(np.empty((0, 2), dtype=np.int32))
 
     return cleaned, centroids, polygons

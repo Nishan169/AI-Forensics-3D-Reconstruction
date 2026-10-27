@@ -1,0 +1,21 @@
+{
+  "direction": "N",
+  "referenceImage": "IMG_20261019_110330.jpg",
+  "timestamp": "2026-10-27T18:12:12.217Z",
+  "angle": 357.5,
+  "northOffset": 357.5,
+  "cameraAzimuth": 4.33,
+  "cameraPosition": [
+    0.641,
+    0.975,
+    -1.079
+  ],
+  "forwardVector": [
+    0.074,
+    -0.177,
+    -0.981
+  ],
+  "isCOLMAPInverted": false,
+  "calibrated": true,
+  "method": "dust3r_camera_pose"
+}

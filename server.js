@@ -16,7 +16,11 @@ app.use(cors({ origin: "http://localhost:5173" }));
 app.use(express.json());
 
 // Serve generated models statically
-app.use("/models", express.static(path.join(__dirname, "frontend/public/models")));
+app.use("/models", express.static(path.join(__dirname, "frontend/public/models"), {
+  setHeaders: (res) => {
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  }
+}));
 app.use("/reference", express.static(path.join(__dirname, "input/reference")));
 app.use("/input/images", express.static(path.join(__dirname, "input/images")));
 
@@ -226,9 +230,10 @@ app.post("/api/upload",
     fs.mkdirSync(outputDir, { recursive: true });
     fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
 
-    // Auto-calibrate direction if camera poses exist from neural reconstruction
+    // Auto-calibrate direction if camera poses exist from neural reconstruction or COLMAP
     const dust3rPoses = path.join(outputDir, "camera_poses.json");
-    if (fs.existsSync(dust3rPoses) && refImageName) {
+    const colmapDir = path.join(outputDir, "colmap", "sparse", "0");
+    if ((fs.existsSync(dust3rPoses) || fs.existsSync(colmapDir)) && refImageName) {
       const pythonCmd = getPythonBin();
       const scriptPath = path.join(__dirname, "scripts", "calibrate_direction.py");
       const py = spawn(pythonCmd, [scriptPath, refImageName, direction], { cwd: __dirname });
@@ -236,9 +241,6 @@ app.post("/api/upload",
         console.log(`[Upload] Auto-calibrated direction for ${refImageName} facing ${direction}`);
       });
     }
-    // [LEGACY / UNVISITED - Shifted from COLMAP to DUSt3R]
-    // const colmapDir = path.join(outputDir, "colmap", "sparse", "0");
-    // if (fs.existsSync(colmapDir) && refImageName) { ... }
 
     res.json({
       sceneCount: sceneFiles.length,
@@ -427,15 +429,15 @@ app.post("/api/reconstruct", (req, res) => {
     { match: "[Open3D] Transferring photographic", label: "Transferring photographic colors", progress: 92 },
     { match: "[Export]", label: "Exporting textured GLB digital twin", progress: 98 },
 
-    // [LEGACY / UNVISITED - Shifted from COLMAP / OpenMVS to DUSt3R]
-    // { match: "feature_extractor", label: "Extracting features", progress: 10 },
-    // { match: "exhaustive_matcher", label: "Matching features", progress: 20 },
-    // { match: "mapper", label: "Sparse reconstruction (COLMAP)", progress: 35 },
-    // { match: "image_undistorter", label: "Undistorting images", progress: 45 },
-    // { match: "InterfaceCOLMAP", label: "Interfacing COLMAP → OpenMVS", progress: 55 },
-    // { match: "DensifyPointCloud", label: "Densifying point cloud", progress: 68 },
-    // { match: "ReconstructMesh", label: "Reconstructing mesh", progress: 80 },
-    // { match: "TextureMesh", label: "Texturing mesh", progress: 90 },
+    // COLMAP / OpenMVS SfM Phases
+    { match: "feature_extractor", label: "Extracting features", progress: 10 },
+    { match: "exhaustive_matcher", label: "Matching features", progress: 20 },
+    { match: "mapper", label: "Sparse reconstruction (COLMAP)", progress: 35 },
+    { match: "image_undistorter", label: "Undistorting images", progress: 45 },
+    { match: "InterfaceCOLMAP", label: "Interfacing COLMAP → OpenMVS", progress: 55 },
+    { match: "DensifyPointCloud", label: "Densifying point cloud", progress: 68 },
+    { match: "ReconstructMesh", label: "Reconstructing mesh", progress: 80 },
+    { match: "TextureMesh", label: "Texturing mesh", progress: 90 },
     { match: "enhance_mesh", label: "Predicting & smoothing room geometry", progress: 96 },
     { match: "DONE", label: "Done!", progress: 100 },
   ];
@@ -471,28 +473,79 @@ app.post("/api/reconstruct", (req, res) => {
       }
       const calibPy = spawn(pythonCmd, [scriptPath, dMeta.referenceImage || "", dMeta.direction || "N"], { cwd: __dirname });
       const detectPath = path.join(__dirname, "scripts", "detect_scene_objects.py");
-      calibPy.on("close", () => {
-        if (fs.existsSync(detectPath)) {
-          const detectPy = spawn(pythonCmd, [detectPath], { cwd: __dirname });
-          detectPy.on("close", () => {
-            lastStatus = {
-              phase: "complete",
-              log: "Reconstruction complete, compass calibrated, and room objects detected!",
-              progress: 100,
-              done: true,
-              error: null,
-            };
-            broadcast(lastStatus);
-          });
-        } else {
+      const finalizeReconstruction = () => {
+        try {
+          const syncFiles = [
+            "scene_textured.glb",
+            "boundary_markers.json",
+            "direction.json",
+            "scene_objects.json",
+            "navgrid.json",
+            "camera_poses.json",
+            "room_bounds.json"
+          ];
+          for (const fname of syncFiles) {
+            const srcFile = path.join(outputDir, fname);
+            const pubFile = path.join(__dirname, "frontend", "public", "models", fname);
+            const distFile = path.join(__dirname, "frontend", "dist", "models", fname);
+            if (fs.existsSync(srcFile)) {
+              fs.mkdirSync(path.dirname(pubFile), { recursive: true });
+              fs.copyFileSync(srcFile, pubFile);
+              if (fs.existsSync(path.dirname(distFile))) {
+                fs.copyFileSync(srcFile, distFile);
+              }
+            }
+          }
+
+          const dirPath = path.join(outputDir, "direction.json");
+          let dirMeta = {};
+          if (fs.existsSync(dirPath)) {
+            try { dirMeta = JSON.parse(fs.readFileSync(dirPath, "utf8")); } catch (_) {}
+          }
+          const northOffset = dirMeta.northOffset ?? dirMeta.angle ?? 0;
+
+          const bmPath = path.join(outputDir, "boundary_markers.json");
+          let boundaryMarkers = null;
+          if (fs.existsSync(bmPath)) {
+            try { boundaryMarkers = JSON.parse(fs.readFileSync(bmPath, "utf8")); } catch (_) {}
+          }
+
+          const objects = loadPhysicalSceneObjects(null, null, northOffset, boundaryMarkers);
+
           lastStatus = {
             phase: "complete",
-            log: "Reconstruction complete and compass calibrated!",
+            log: "Reconstruction complete, compass calibrated, and room objects detected!",
+            progress: 100,
+            done: true,
+            error: null,
+            boundaryMarkers,
+            northOffset,
+            direction: dirMeta.direction || "N",
+            objects
+          };
+          broadcast(lastStatus);
+          console.log(`[Reconstruct Complete] Synchronized models and broadcasted aligned markers (northOffset: ${northOffset}°).`);
+        } catch (fErr) {
+          console.error("[Reconstruct Complete] Notice during artifact finalization:", fErr);
+          lastStatus = {
+            phase: "complete",
+            log: "Reconstruction complete!",
             progress: 100,
             done: true,
             error: null,
           };
           broadcast(lastStatus);
+        }
+      };
+
+      calibPy.on("close", () => {
+        if (fs.existsSync(detectPath)) {
+          const detectPy = spawn(pythonCmd, [detectPath], { cwd: __dirname });
+          detectPy.on("close", () => {
+            finalizeReconstruction();
+          });
+        } else {
+          finalizeReconstruction();
         }
       });
     } else {
@@ -543,36 +596,55 @@ app.post("/api/flip-model", (req, res) => {
     }
 
     try {
-      const srcGlb = path.join(outputDir, "scene_textured.glb");
-      const pubGlb = path.join(__dirname, "frontend", "public", "models", "scene_textured.glb");
-      const distGlb = path.join(__dirname, "frontend", "dist", "models", "scene_textured.glb");
+      const syncFiles = [
+        "scene_textured.glb",
+        "boundary_markers.json",
+        "direction.json",
+        "scene_objects.json",
+        "navgrid.json",
+        "room_bounds.json"
+      ];
 
-      if (fs.existsSync(srcGlb)) {
-        fs.mkdirSync(path.dirname(pubGlb), { recursive: true });
-        fs.copyFileSync(srcGlb, pubGlb);
-        console.log(`[FlipModel] Copied flipped model to: ${pubGlb}`);
+      for (const fname of syncFiles) {
+        const srcFile = path.join(outputDir, fname);
+        const pubFile = path.join(__dirname, "frontend", "public", "models", fname);
+        const distFile = path.join(__dirname, "frontend", "dist", "models", fname);
 
-        if (fs.existsSync(path.dirname(distGlb))) {
-          fs.copyFileSync(srcGlb, distGlb);
-          console.log(`[FlipModel] Copied flipped model to: ${distGlb}`);
+        if (fs.existsSync(srcFile)) {
+          fs.mkdirSync(path.dirname(pubFile), { recursive: true });
+          fs.copyFileSync(srcFile, pubFile);
+          if (fs.existsSync(path.dirname(distFile))) {
+            fs.copyFileSync(srcFile, distFile);
+          }
         }
       }
 
-      const srcBounds = path.join(outputDir, "room_bounds.json");
-      const pubBounds = path.join(__dirname, "frontend", "public", "models", "room_bounds.json");
-      const distBounds = path.join(__dirname, "frontend", "dist", "models", "room_bounds.json");
+      const dirPath = path.join(outputDir, "direction.json");
+      let dirMeta = {};
+      if (fs.existsSync(dirPath)) {
+        try { dirMeta = JSON.parse(fs.readFileSync(dirPath, "utf8")); } catch (_) {}
+      }
+      const northOffset = dirMeta.northOffset ?? dirMeta.angle ?? 0;
 
-      if (fs.existsSync(srcBounds)) {
-        fs.copyFileSync(srcBounds, pubBounds);
-        console.log(`[FlipModel] Copied room bounds to: ${pubBounds}`);
-        if (fs.existsSync(path.dirname(distBounds))) {
-          fs.copyFileSync(srcBounds, distBounds);
-        }
+      const bmPath = path.join(outputDir, "boundary_markers.json");
+      let boundaryMarkers = null;
+      if (fs.existsSync(bmPath)) {
+        try { boundaryMarkers = JSON.parse(fs.readFileSync(bmPath, "utf8")); } catch (_) {}
       }
 
-      return res.status(200).json({ success: true, message: "Model flipped successfully" });
+      const objects = loadPhysicalSceneObjects(null, null, northOffset, boundaryMarkers);
+
+      console.log(`[FlipModel] Flipped successfully: northOffset = ${northOffset}°, markers updated.`);
+      return res.status(200).json({
+        success: true,
+        message: "Model flipped and directions reassigned successfully",
+        northOffset,
+        direction: dirMeta.direction || "N",
+        boundaryMarkers,
+        objects
+      });
     } catch (copyErr) {
-      console.error("[FlipModel] Error copying flipped GLB:", copyErr);
+      console.error("[FlipModel] Error synchronizing flipped model:", copyErr);
       return res.status(500).json({ success: false, error: copyErr.message });
     }
   });
@@ -591,7 +663,7 @@ app.post("/api/recreation/plan", async (req, res) => {
       return res.status(400).json({ error: "Missing or invalid prompt string" });
     }
 
-    // Persist incoming boundaryMarkers only if not already calibrated on disk
+    // Persist incoming boundaryMarkers matching active 3D model only if not already present on disk
     const bmFile = path.join(outputDir, "boundary_markers.json");
     if (!fs.existsSync(bmFile) && boundaryMarkers && typeof boundaryMarkers === "object" && Object.keys(boundaryMarkers).length > 0) {
       try {

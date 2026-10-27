@@ -713,6 +713,21 @@ def main():
     if is_inverted:
         print("[Open3D Orient] is_inverted is True: applying 180° X-axis rotation...")
         mesh.rotate(mesh.get_rotation_matrix_from_xyz((np.pi, 0, 0)), center=mesh.get_center())
+        if poses_path.exists():
+            try:
+                with open(poses_path, "r", encoding="utf-8") as pf:
+                    c_poses = json.load(pf)
+                M3 = np.diag([1.0, -1.0, -1.0])
+                for k, p in c_poses.items():
+                    p_mat = np.array(p, dtype=np.float64)
+                    p_mat[:3, :3] = M3 @ p_mat[:3, :3]
+                    p_mat[:3, 3] = M3 @ p_mat[:3, 3]
+                    c_poses[k] = p_mat.tolist()
+                with open(poses_path, "w", encoding="utf-8") as pf:
+                    json.dump(c_poses, pf, indent=2)
+                print(f"[DUSt3R] Inverted {len(c_poses)} camera poses to match 180° mesh flip.")
+            except Exception as e:
+                print(f"[DUSt3R] Notice inverting camera poses: {e}")
         print("[Open3D Orient] Corrective 180° flip applied successfully.")
     else:
         print("[Open3D Orient] is_inverted is False: keeping original mesh orientation.")
@@ -736,6 +751,20 @@ def main():
     center = mesh.get_center()
     print(f"[Open3D Norm] Centering mesh: translating from [{center[0]:.3f}, {center[1]:.3f}, {center[2]:.3f}] to (0, 0, 0)...")
     mesh.translate(-center, relative=True)
+
+    if poses_path.exists():
+        try:
+            with open(poses_path, "r", encoding="utf-8") as pf:
+                c_poses = json.load(pf)
+            for k, p in c_poses.items():
+                p_mat = np.array(p, dtype=np.float64)
+                p_mat[:3, 3] = (p_mat[:3, 3] - center) * scale_factor
+                c_poses[k] = p_mat.tolist()
+            with open(poses_path, "w", encoding="utf-8") as pf:
+                json.dump(c_poses, pf, indent=2)
+            print(f"[DUSt3R] Scaled & centered {len(c_poses)} camera poses to match mesh origin.")
+        except Exception as e:
+            print(f"[DUSt3R] Notice scaling/translating camera poses: {e}")
 
     # Verification of final scaled & centered dimensions & AABB corner extraction
     final_aabb = mesh.get_axis_aligned_bounding_box()
@@ -779,6 +808,24 @@ def main():
             subprocess.run([sys.executable, str(detect_script)], cwd=str(root_dir), check=False)
         except Exception as e:
             print(f"[Objects] Notice: {e}")
+
+    # Synchronize all output artifacts to frontend public and dist models directories
+    sync_files = [
+        "scene_textured.glb",
+        "boundary_markers.json",
+        "direction.json",
+        "scene_objects.json",
+        "navgrid.json",
+        "camera_poses.json",
+        "room_bounds.json"
+    ]
+    for dest_dir in [root_dir / "frontend" / "public" / "models", root_dir / "frontend" / "dist" / "models"]:
+        if dest_dir.exists():
+            for fname in sync_files:
+                src_f = root_dir / "output" / fname
+                if src_f.exists():
+                    shutil.copy2(src_f, dest_dir / fname)
+            print(f"[DUSt3R Deploy] Synchronized pipeline artifacts to: {dest_dir.name}")
 
     print("\n=================================================================")
     print("DONE. 3D Digital Twin successfully generated via DUSt3R!")
