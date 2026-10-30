@@ -5,10 +5,10 @@
     "label": "Central Living Room Table",
     "icon": "\ud83e\udeb5",
     "pos": [
-      0.0,
-      -0.95
+      -0.01,
+      -1.04
     ],
-    "y": -0.254,
+    "y": -0.259,
     "inward": [
       0.0,
       1.0
@@ -32,10 +32,10 @@
     "label": "Master Bed",
     "icon": "\ud83d\udecf\ufe0f",
     "pos": [
-      0.92,
-      1.37
+      0.89,
+      1.39
     ],
-    "y": 0.303,
+    "y": 0.3,
     "inward": [
       1.0,
       0.0
@@ -59,10 +59,10 @@
     "label": "Victim Chair",
     "icon": "\ud83e\ude91",
     "pos": [
-      0.013,
-      -0.004
+      -0.012,
+      0.003
     ],
-    "y": -0.147,
+    "y": -0.145,
     "inward": [
       0.0,
       -1.0
@@ -86,12 +86,12 @@
     "label": "North Chair",
     "icon": "\ud83e\ude91",
     "pos": [
-      -0.061,
-      -1.542
+      -0.073,
+      -1.532
     ],
-    "y": -0.295,
+    "y": -0.33,
     "inward": [
-      0.048,
+      0.039,
       0.999
     ],
     "size": [
@@ -102,7 +102,7 @@
     "confidence": 0.95,
     "sector": "N",
     "sectorLabel": "North",
-    "bearing": 357.2,
+    "bearing": 357.7,
     "distance": 1.54,
     "isCenter": false,
     "displayBadge": "\ud83e\ude91 North Chair [N]"
@@ -113,12 +113,12 @@
     "label": "North Door",
     "icon": "\ud83d\udeaa",
     "pos": [
-      -0.101,
-      -2.37
+      -0.105,
+      -2.359
     ],
-    "y": 0.153,
+    "y": 0.17,
     "inward": [
-      0.048,
+      0.039,
       0.999
     ],
     "size": [
@@ -129,8 +129,8 @@
     "confidence": 0.95,
     "sector": "N",
     "sectorLabel": "North",
-    "bearing": 357.2,
-    "distance": 2.37,
+    "bearing": 357.8,
+    "distance": 2.36,
     "isCenter": false,
     "displayBadge": "\ud83d\udeaa North Door [N]"
   },
@@ -140,12 +140,12 @@
     "label": "North Window",
     "icon": "\ud83e\ude9f",
     "pos": [
-      -0.101,
-      -2.37
+      -0.105,
+      -2.359
     ],
-    "y": 0.153,
+    "y": 0.17,
     "inward": [
-      0.048,
+      0.039,
       0.999
     ],
     "size": [
@@ -156,8 +156,8 @@
     "confidence": 0.92,
     "sector": "N",
     "sectorLabel": "North",
-    "bearing": 357.2,
-    "distance": 2.37,
+    "bearing": 357.8,
+    "distance": 2.36,
     "isCenter": false,
     "displayBadge": "\ud83e\ude9f North Window [N]"
   },
@@ -167,13 +167,13 @@
     "label": "North-East Chair",
     "icon": "\ud83e\ude91",
     "pos": [
-      0.849,
-      -1.586
+      0.843,
+      -1.569
     ],
-    "y": 0.12,
+    "y": 0.121,
     "inward": [
-      -0.467,
-      0.884
+      -0.478,
+      0.878
     ],
     "size": [
       0.65,
@@ -183,7 +183,7 @@
     "confidence": 0.95,
     "sector": "NE",
     "sectorLabel": "North-East",
-    "bearing": 27.9,
+    "bearing": 28.6,
     "distance": 1.79,
     "isCenter": false,
     "displayBadge": "\ud83e\ude91 North-East Chair [NE]"
@@ -194,13 +194,13 @@
     "label": "North-East Door",
     "icon": "\ud83d\udeaa",
     "pos": [
-      1.299,
-      -2.438
+      1.304,
+      -2.415
     ],
-    "y": -0.366,
+    "y": 0.909,
     "inward": [
-      -0.467,
-      0.884
+      -0.478,
+      0.878
     ],
     "size": [
       1.1,
@@ -210,7 +210,7 @@
     "confidence": 0.95,
     "sector": "NE",
     "sectorLabel": "North-East",
-    "bearing": 27.9,
+    "bearing": 28.6,
     "distance": 2.75,
     "isCenter": false,
     "displayBadge": "\ud83d\udeaa North-East Door [NE]"
@@ -221,13 +221,13 @@
     "label": "East Chair",
     "icon": "\ud83e\ude91",
     "pos": [
-      0.923,
-      -0.048
+      0.904,
+      -0.033
     ],
-    "y": -0.202,
+    "y": -0.21,
     "inward": [
       -0.999,
-      0.048
+      0.039
     ],
     "size": [
       0.65,
@@ -237,8 +237,8 @@
     "confidence": 0.95,
     "sector": "E",
     "sectorLabel": "East",
-    "bearing": 87.3,
-    "distance": 0.91,
+    "bearing": 87.8,
+    "distance": 0.92,
     "isCenter": false,
     "displayBadge": "\ud83e\ude91 East Chair [E]"
   },
@@ -248,13 +248,13 @@
     "label": "East Door",
     "icon": "\ud83d\udeaa",
     "pos": [
-      1.413,
-      -0.072
+      1.397,
+      -0.052
     ],
-    "y": -0.377,
+    "y": 0.909,
     "inward": [
       -0.999,
-      0.048
+      0.039
     ],
     "size": [
       1.1,
@@ -264,8 +264,8 @@
     "confidence": 0.95,
     "sector": "E",
     "sectorLabel": "East",
-    "bearing": 87.2,
-    "distance": 1.4,
+    "bearing": 87.8,
+    "distance": 1.41,
     "isCenter": false,
     "displayBadge": "\ud83d\udeaa East Door [E]"
   },
@@ -275,13 +275,13 @@
     "label": "East Window",
     "icon": "\ud83e\ude9f",
     "pos": [
-      1.413,
-      -0.072
+      1.397,
+      -0.052
     ],
-    "y": -0.377,
+    "y": 0.909,
     "inward": [
       -0.999,
-      0.048
+      0.039
     ],
     "size": [
       1.6,
@@ -291,8 +291,8 @@
     "confidence": 0.92,
     "sector": "E",
     "sectorLabel": "East",
-    "bearing": 87.2,
-    "distance": 1.4,
+    "bearing": 87.8,
+    "distance": 1.41,
     "isCenter": false,
     "displayBadge": "\ud83e\ude9f East Window [E]"
   },
@@ -302,13 +302,13 @@
     "label": "South-East Chair",
     "icon": "\ud83e\ude91",
     "pos": [
-      0.996,
-      1.49
+      0.964,
+      1.503
     ],
-    "y": 0.3,
+    "y": 0.302,
     "inward": [
-      -0.549,
-      -0.836
+      -0.546,
+      -0.838
     ],
     "size": [
       0.65,
@@ -318,7 +318,7 @@
     "confidence": 0.95,
     "sector": "SE",
     "sectorLabel": "South-East",
-    "bearing": 146.7,
+    "bearing": 146.9,
     "distance": 1.79,
     "isCenter": false,
     "displayBadge": "\ud83e\ude91 South-East Chair [SE]"
@@ -329,13 +329,13 @@
     "label": "South-East Door",
     "icon": "\ud83d\udeaa",
     "pos": [
-      1.526,
-      2.294
+      1.49,
+      2.31
     ],
-    "y": -0.387,
+    "y": 0.909,
     "inward": [
-      -0.55,
-      -0.835
+      -0.546,
+      -0.838
     ],
     "size": [
       1.1,
@@ -345,7 +345,7 @@
     "confidence": 0.95,
     "sector": "SE",
     "sectorLabel": "South-East",
-    "bearing": 146.6,
+    "bearing": 146.9,
     "distance": 2.75,
     "isCenter": false,
     "displayBadge": "\ud83d\udeaa South-East Door [SE]"
@@ -356,12 +356,12 @@
     "label": "South Chair",
     "icon": "\ud83e\ude91",
     "pos": [
-      0.087,
-      1.533
+      0.048,
+      1.538
     ],
-    "y": -0.002,
+    "y": -0.016,
     "inward": [
-      -0.048,
+      -0.039,
       -0.999
     ],
     "size": [
@@ -372,7 +372,7 @@
     "confidence": 0.95,
     "sector": "S",
     "sectorLabel": "South",
-    "bearing": 177.2,
+    "bearing": 177.7,
     "distance": 1.54,
     "isCenter": false,
     "displayBadge": "\ud83e\ude91 South Chair [S]"
@@ -383,12 +383,12 @@
     "label": "South Door",
     "icon": "\ud83d\udeaa",
     "pos": [
-      0.127,
-      2.361
+      0.081,
+      2.365
     ],
-    "y": 0.531,
+    "y": 0.539,
     "inward": [
-      -0.048,
+      -0.04,
       -0.999
     ],
     "size": [
@@ -399,8 +399,8 @@
     "confidence": 0.95,
     "sector": "S",
     "sectorLabel": "South",
-    "bearing": 177.2,
-    "distance": 2.37,
+    "bearing": 177.7,
+    "distance": 2.36,
     "isCenter": false,
     "displayBadge": "\ud83d\udeaa South Door [S]"
   },
@@ -410,12 +410,12 @@
     "label": "South Window",
     "icon": "\ud83e\ude9f",
     "pos": [
-      0.127,
-      2.361
+      0.081,
+      2.365
     ],
-    "y": 0.531,
+    "y": 0.539,
     "inward": [
-      -0.048,
+      -0.04,
       -0.999
     ],
     "size": [
@@ -426,8 +426,8 @@
     "confidence": 0.92,
     "sector": "S",
     "sectorLabel": "South",
-    "bearing": 177.2,
-    "distance": 2.37,
+    "bearing": 177.7,
+    "distance": 2.36,
     "isCenter": false,
     "displayBadge": "\ud83e\ude9f South Window [S]"
   },
@@ -437,13 +437,13 @@
     "label": "South-West Chair",
     "icon": "\ud83e\ude91",
     "pos": [
-      -0.823,
-      1.577
+      -0.868,
+      1.575
     ],
-    "y": 0.141,
+    "y": 0.147,
     "inward": [
-      0.467,
-      -0.884
+      0.478,
+      -0.878
     ],
     "size": [
       0.65,
@@ -453,7 +453,7 @@
     "confidence": 0.95,
     "sector": "SW",
     "sectorLabel": "South-West",
-    "bearing": 207.9,
+    "bearing": 208.6,
     "distance": 1.79,
     "isCenter": false,
     "displayBadge": "\ud83e\ude91 South-West Chair [SW]"
@@ -464,13 +464,13 @@
     "label": "South-West Door",
     "icon": "\ud83d\udeaa",
     "pos": [
-      -1.273,
-      2.429
+      -1.329,
+      2.421
     ],
-    "y": 0.704,
+    "y": 0.712,
     "inward": [
-      0.467,
-      -0.884
+      0.478,
+      -0.878
     ],
     "size": [
       1.1,
@@ -480,7 +480,7 @@
     "confidence": 0.95,
     "sector": "SW",
     "sectorLabel": "South-West",
-    "bearing": 207.9,
+    "bearing": 208.6,
     "distance": 2.75,
     "isCenter": false,
     "displayBadge": "\ud83d\udeaa South-West Door [SW]"
@@ -491,13 +491,13 @@
     "label": "West Chair",
     "icon": "\ud83e\ude91",
     "pos": [
-      -0.896,
+      -0.929,
       0.039
     ],
-    "y": -0.037,
+    "y": 0.909,
     "inward": [
       0.999,
-      -0.048
+      -0.039
     ],
     "size": [
       0.65,
@@ -507,8 +507,8 @@
     "confidence": 0.95,
     "sector": "W",
     "sectorLabel": "West",
-    "bearing": 267.3,
-    "distance": 0.91,
+    "bearing": 267.8,
+    "distance": 0.92,
     "isCenter": false,
     "displayBadge": "\ud83e\ude91 West Chair [W]"
   },
@@ -518,13 +518,13 @@
     "label": "West Door",
     "icon": "\ud83d\udeaa",
     "pos": [
-      -1.386,
-      0.063
+      -1.422,
+      0.058
     ],
-    "y": 0.068,
+    "y": 0.07,
     "inward": [
       0.999,
-      -0.048
+      -0.039
     ],
     "size": [
       1.1,
@@ -534,8 +534,8 @@
     "confidence": 0.95,
     "sector": "W",
     "sectorLabel": "West",
-    "bearing": 267.2,
-    "distance": 1.4,
+    "bearing": 267.8,
+    "distance": 1.41,
     "isCenter": false,
     "displayBadge": "\ud83d\udeaa West Door [W]"
   },
@@ -545,13 +545,13 @@
     "label": "West Window",
     "icon": "\ud83e\ude9f",
     "pos": [
-      -1.386,
-      0.063
+      -1.422,
+      0.058
     ],
-    "y": 0.068,
+    "y": 0.07,
     "inward": [
       0.999,
-      -0.048
+      -0.039
     ],
     "size": [
       1.6,
@@ -561,8 +561,8 @@
     "confidence": 0.92,
     "sector": "W",
     "sectorLabel": "West",
-    "bearing": 267.2,
-    "distance": 1.4,
+    "bearing": 267.8,
+    "distance": 1.41,
     "isCenter": false,
     "displayBadge": "\ud83e\ude9f West Window [W]"
   },
@@ -572,13 +572,13 @@
     "label": "North-West Chair",
     "icon": "\ud83e\ude91",
     "pos": [
-      -0.97,
-      -1.499
+      -0.989,
+      -1.497
     ],
-    "y": -0.187,
+    "y": -0.18,
     "inward": [
-      0.55,
-      0.835
+      0.546,
+      0.838
     ],
     "size": [
       0.65,
@@ -588,7 +588,7 @@
     "confidence": 0.95,
     "sector": "NW",
     "sectorLabel": "North-West",
-    "bearing": 326.7,
+    "bearing": 326.9,
     "distance": 1.79,
     "isCenter": false,
     "displayBadge": "\ud83e\ude91 North-West Chair [NW]"
@@ -599,13 +599,13 @@
     "label": "North-West Door",
     "icon": "\ud83d\udeaa",
     "pos": [
-      -1.5,
-      -2.303
+      -1.515,
+      -2.304
     ],
-    "y": 0.425,
+    "y": 0.841,
     "inward": [
-      0.55,
-      0.835
+      0.546,
+      0.838
     ],
     "size": [
       1.1,
@@ -615,7 +615,7 @@
     "confidence": 0.95,
     "sector": "NW",
     "sectorLabel": "North-West",
-    "bearing": 326.6,
+    "bearing": 326.9,
     "distance": 2.75,
     "isCenter": false,
     "displayBadge": "\ud83d\udeaa North-West Door [NW]"

@@ -6,6 +6,8 @@ import "./index.css";
 import ForensicSimulation, { SceneAnchorMarker } from "./components/ForensicSimulation";
 import RecreationStudio from "./components/RecreationStudio";
 import ThreatDetectionTab from "./components/threat/ThreatDetectionTab";
+import AccidentSimulation from "./components/AccidentSimulation";
+import AccidentStudio from "./components/AccidentStudio";
 
 const API = ""; // Vite proxies /api and /models → http://localhost:3001
 
@@ -1133,6 +1135,9 @@ export default function App() {
 
   // ── Crime Recreation & Video Simulation State ────────────────────────
   const [planData, setPlanData] = useState(null);
+  const [accidentPlanData, setAccidentPlanData] = useState(null);
+  const [isAccidentPlanning, setIsAccidentPlanning] = useState(false);
+  const [accidentCameraMode, setAccidentCameraMode] = useState("orbit");
   const [sceneObjects, setSceneObjects] = useState([]);
   const [serverBoundaryMarkers, setServerBoundaryMarkers] = useState(null);
   const [isPlanning, setIsPlanning] = useState(false);
@@ -1283,8 +1288,38 @@ export default function App() {
       .catch(() => {});
   }, []);
 
+  const handleGenerateAccidentPlan = useCallback(async (promptText) => {
+    setIsAccidentPlanning(true);
+    try {
+      const res = await fetch(`${API}/api/accident/plan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: promptText,
+          apiKey: geminiApiKey,
+          bounds: modelInfo?.bounds || null
+        })
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      setAccidentPlanData(data);
+      setCurrentTime(0);
+      setIsPlaying(true);
+    } catch (err) {
+      console.error("Accident simulation error:", err);
+      alert("Failed to plan accident simulation: " + err.message);
+    } finally {
+      setIsAccidentPlanning(false);
+    }
+  }, [geminiApiKey, modelInfo]);
+
+  const effectivePlan = useMemo(() => {
+    if (activeTab === "accident") return accidentPlanData?.plan;
+    return planData?.plan;
+  }, [activeTab, accidentPlanData, planData]);
+
   // ── Clock tick handler ───────────────────────────────────────────────
-  const duration = planData?.plan?.duration || 10;
+  const duration = effectivePlan?.duration || 10;
   const handleClockTick = useCallback(
     (deltaSec) => {
       setCurrentTime((prev) => {
@@ -1301,13 +1336,13 @@ export default function App() {
 
   // ── Active narrative caption computed from timeline ──────────────────
   const activeCaption = useMemo(() => {
-    if (!planData?.plan?.captions) return "";
+    if (!effectivePlan?.captions) return "";
     let cap = "";
-    for (const c of planData.plan.captions) {
+    for (const c of effectivePlan.captions) {
       if (c.t <= currentTime) cap = c.text;
     }
     return cap;
-  }, [planData, currentTime]);
+  }, [effectivePlan, currentTime]);
 
   // ── Gemini API key storage ───────────────────────────────────────────
   const handleApiKeyChange = useCallback((newKey) => {
@@ -1434,6 +1469,7 @@ export default function App() {
     setModelUrl(null);
     setModelInfo(null);
     setPlanData(null);
+    setAccidentPlanData(null);
     setSceneObjects([]);
     setStatus({ phase: "idle", log: "", progress: 0, done: false, error: null });
     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -1469,7 +1505,7 @@ export default function App() {
       />
 
       {/* ── 3D Viewer & Simulation Canvas ── */}
-      <main className={`viewer-area ${activeTab === "recreation" ? "recreation-mode" : ""} ${activeTab === "threat_detection" ? "threat-mode" : ""}`}>
+      <main className={`viewer-area ${(activeTab === "recreation" || activeTab === "accident") ? "recreation-mode" : ""} ${activeTab === "threat_detection" ? "threat-mode" : ""}`}>
         <div className="viewer-topbar">
           <div className="viewer-topbar-left">
             <span
@@ -1490,9 +1526,24 @@ export default function App() {
             >
               🔬 Threat & Evidence Analysis
             </span>
+            <span
+              className={`viewer-tab ${activeTab === "accident" ? "active" : ""}`}
+              onClick={() => {
+                setActiveTab("accident");
+                setCurrentTime(0);
+                setIsPlaying(false);
+                if (controlsRef.current) {
+                  controlsRef.current.target.set(0, 0, 0);
+                  controlsRef.current.object.position.set(0, 14, 22);
+                  controlsRef.current.update();
+                }
+              }}
+            >
+              🚗 Accident Reconstruction Studio
+            </span>
 
-            {activeTab !== "threat_detection" && modelUrl && <span className="viewer-badge">✓ 3D Mesh Active</span>}
-            {activeTab !== "threat_detection" && (
+            {activeTab !== "threat_detection" && activeTab !== "accident" && modelUrl && <span className="viewer-badge">✓ 3D Mesh Active</span>}
+            {activeTab !== "threat_detection" && activeTab !== "accident" && (
               <button
                 id="btn-face-direction"
                 className="btn-face-quick"
@@ -1502,7 +1553,7 @@ export default function App() {
                 🎯 Face North
               </button>
             )}
-            {activeTab !== "threat_detection" && modelUrl && (
+            {activeTab !== "threat_detection" && activeTab !== "accident" && modelUrl && (
               <button
                 id="btn-flip-orientation"
                 className="btn-face-quick btn-flip-quick"
@@ -1516,7 +1567,7 @@ export default function App() {
           </div>
 
           <div className="viewer-topbar-right">
-            {modelUrlToLoad && (
+            {activeTab !== "accident" && modelUrlToLoad && (
               <a
                 href={modelUrlToLoad}
                 download="scene_textured.glb"
@@ -1573,6 +1624,43 @@ export default function App() {
           </div>
         )}
 
+        {/* ── Top Section: Accident Reconstruction Controls ── */}
+        {activeTab === "accident" && (
+          <div className="recreation-top-container">
+            <AccidentStudio
+              planData={accidentPlanData}
+              onGeneratePlan={handleGenerateAccidentPlan}
+              isPlanning={isAccidentPlanning}
+              currentTime={currentTime}
+              onTimeChange={setCurrentTime}
+              isPlaying={isPlaying}
+              onTogglePlay={() => {
+                if (currentTime >= (accidentPlanData?.plan?.duration || 7)) setCurrentTime(0);
+                setIsPlaying(!isPlaying);
+              }}
+              onRestart={() => {
+                setCurrentTime(0);
+                setIsPlaying(true);
+              }}
+              speed={playbackSpeed}
+              onSpeedChange={setPlaybackSpeed}
+              cameraMode={accidentCameraMode}
+              onCameraModeChange={setAccidentCameraMode}
+              showRoutes={showRoutes}
+              onToggleRoutes={setShowRoutes}
+              showLabels={showLabels}
+              onToggleLabels={setShowLabels}
+              activeCaption={activeCaption}
+              getCanvasElement={() => canvasRef.current || document.querySelector("canvas")}
+              apiKey={geminiApiKey}
+              onApiKeyChange={handleApiKeyChange}
+              onScrollTo3D={() => {
+                document.getElementById("simulation-canvas-section")?.scrollIntoView({ behavior: "smooth" });
+              }}
+            />
+          </div>
+        )}
+
         {/* Threat Detection & Evidence Analysis Tab */}
         {activeTab === "threat_detection" && (
           <div style={{ flex: 1, width: "100%", height: "calc(100% - 49px)", overflowY: "auto", position: "relative", zIndex: 1 }}>
@@ -1587,7 +1675,7 @@ export default function App() {
         {activeTab !== "threat_detection" && (
           <div
             id="simulation-canvas-section"
-            className={`viewer-canvas ${activeTab === "recreation" ? "recreation-canvas" : ""}`}
+            className={`viewer-canvas ${(activeTab === "recreation" || activeTab === "accident") ? "recreation-canvas" : ""}`}
           >
             <Canvas
               key={modelKey}
@@ -1612,7 +1700,7 @@ export default function App() {
               />
 
               {/* Model if available */}
-              {modelUrlToLoad && (
+              {activeTab !== "accident" && modelUrlToLoad && (
                 <Suspense fallback={null}>
                   <ModelWithCamera
                     key={flipKey}
@@ -1626,7 +1714,7 @@ export default function App() {
               )}
 
               {/* 3D Direction Markers (strictly on 4 room corners & 4 wall midpoints) */}
-              {compassCalibrated && (
+              {activeTab !== "accident" && compassCalibrated && (
                 <DirectionMarkers
                   markers={modelInfo?.boundaryMarkers}
                   northOffset={northOffset}
@@ -1695,6 +1783,18 @@ export default function App() {
                   <group>{simContent}</group>
                 );
               })()}
+
+              {/* Vehicle Accident Simulation inside Canvas */}
+              {activeTab === "accident" && accidentPlanData?.plan && (
+                <AccidentSimulation
+                  plan={accidentPlanData.plan}
+                  currentTime={currentTime}
+                  cameraMode={accidentCameraMode}
+                  controlsRef={controlsRef}
+                  showRoutes={showRoutes}
+                  showLabels={showLabels}
+                />
+              )}
 
               {/* Simulation Clock & WebGL Canvas Link */}
               <SimulationClock

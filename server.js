@@ -7,6 +7,7 @@ import { fileURLToPath } from "url";
 import cors from "cors";
 import { parseCrimeScript, resolveSceneAnchors, generateCrimePlan } from "./crime_planner.js";
 import { loadPhysicalSceneObjects } from "./scene_objects.js";
+import { parseAccidentPrompt, generateAccidentPlan } from "./accident_planner.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -732,6 +733,49 @@ app.get("/api/recreation/plan", (req, res) => {
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: "Failed to read recreation plan" });
+  }
+});
+
+// ── Forensic Vehicle & Rail Accident Recreation Endpoint ──────────────
+app.post("/api/accident/plan", async (req, res) => {
+  try {
+    const { prompt, apiKey, bounds } = req.body;
+    if (!prompt || typeof prompt !== "string") {
+      return res.status(400).json({ error: "Missing or invalid prompt string" });
+    }
+
+    console.log(`[Accident Simulation] Processing prompt: "${prompt}"`);
+    const { script, source } = await parseAccidentPrompt(prompt, apiKey);
+    const plan = generateAccidentPlan(script, bounds);
+
+    const result = {
+      success: true,
+      prompt,
+      source,
+      script,
+      plan,
+      timestamp: new Date().toISOString()
+    };
+
+    fs.mkdirSync(outputDir, { recursive: true });
+    fs.writeFileSync(path.join(outputDir, "accident_plan.json"), JSON.stringify(result, null, 2));
+
+    res.json(result);
+  } catch (err) {
+    console.error("Accident planning error:", err);
+    res.status(500).json({ error: err.message || "Failed to generate accident recreation plan" });
+  }
+});
+
+app.get("/api/accident/plan", (req, res) => {
+  const planPath = path.join(outputDir, "accident_plan.json");
+  if (!fs.existsSync(planPath)) {
+    return res.status(404).json({ error: "No accident plan found" });
+  }
+  try {
+    res.json(JSON.parse(fs.readFileSync(planPath, "utf8")));
+  } catch (err) {
+    res.status(500).json({ error: "Failed to read accident plan" });
   }
 });
 
