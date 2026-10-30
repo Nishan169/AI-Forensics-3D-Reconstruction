@@ -6,6 +6,8 @@ import "./index.css";
 import ForensicSimulation, { SceneAnchorMarker } from "./components/ForensicSimulation";
 import RecreationStudio from "./components/RecreationStudio";
 import ThreatDetectionTab from "./components/threat/ThreatDetectionTab";
+import AccidentSimulation from "./components/AccidentSimulation";
+import AccidentStudio from "./components/AccidentStudio";
 
 const API = ""; // Vite proxies /api and /models → http://localhost:3001
 
@@ -32,66 +34,251 @@ function SimulationClock({ isPlaying, speed, onTick }) {
   return null;
 }
 
-// ── Forensic Spatial Room (shown when no photogrammetry mesh loaded) ──
-function ForensicSpatialRoom({ center = [0, 0, 0], radius = 4, northOffset = 0, roomSize = null }) {
-  const halfX = roomSize ? roomSize[0] * 0.48 : radius;
-  const halfZ = roomSize ? roomSize[2] * 0.48 : radius;
+// ── Extract 4 true physical corners & 4 wall midpoints via 2D Oriented Bounding Box ──
+function computeRoomBoundaryMarkers(vertices, northOffset = 0) {
+  if (!vertices || vertices.length < 10) return null;
 
-  const cardinals = [
-    { label: "N", relPos: [0, -halfZ], color: "#ff6b6b", isNorth: true },
-    { label: "S", relPos: [0, halfZ], color: "#94a3b8" },
-    { label: "E", relPos: [halfX, 0], color: "#94a3b8" },
-    { label: "W", relPos: [-halfX, 0], color: "#94a3b8" },
-    { label: "NE", relPos: [halfX, -halfZ], color: "#64748b" },
-    { label: "NW", relPos: [-halfX, -halfZ], color: "#64748b" },
-    { label: "SE", relPos: [halfX, halfZ], color: "#64748b" },
-    { label: "SW", relPos: [-halfX, halfZ], color: "#64748b" },
+  // 1. Median center & floor/ceil Y
+  const xs = vertices.map((v) => v.x).sort((a, b) => a - b);
+  const zs = vertices.map((v) => v.z).sort((a, b) => a - b);
+  const ys = vertices.map((v) => v.y).sort((a, b) => a - b);
+
+  const N = xs.length;
+  const medX = xs[Math.floor(N * 0.5)];
+  const medZ = zs[Math.floor(N * 0.5)];
+  const floorY = ys[Math.floor(N * 0.025)] || 0;
+  const p5Y = ys[Math.floor(N * 0.05)] || 0;
+  const p95Y = ys[Math.floor(N * 0.95)] || 3.0;
+
+  // Filter vertical wall points
+  const wallPts = vertices.filter((v) => {
+    const isY = v.y > p5Y + 0.30 && v.y < p95Y - 0.30;
+    if (v.ny !== undefined) {
+      return isY && Math.abs(v.ny) < 0.30;
+    }
+    return isY;
+  });
+  const pts = wallPts.length >= 50 ? wallPts : vertices;
+
+  // Dominant architectural orientation alpha
+  let bestAlpha = 0;
+  const ptsWithNorm = pts.filter((v) => v.nx !== undefined && v.nz !== undefined);
+  if (ptsWithNorm.length >= 50) {
+    let bestScore = -1;
+    for (let a = 0; a < 90; a += 0.5) {
+      const r = (a * Math.PI) / 180.0;
+      const cosA = Math.cos(r);
+      const sinA = Math.sin(r);
+      let count = 0;
+      for (const p of ptsWithNorm) {
+        const nxRot = p.nx * cosA + p.nz * sinA;
+        const nzRot = -p.nx * sinA + p.nz * cosA;
+        if (Math.max(Math.abs(nxRot), Math.abs(nzRot)) > 0.94) count++;
+      }
+      const score = count / ptsWithNorm.length;
+      if (score > bestScore) {
+        bestScore = score;
+        bestAlpha = a;
+      }
+    }
+  } else {
+    // 2D Covariance fallback
+    let covXX = 0, covZZ = 0, covXZ = 0;
+    for (const p of pts) {
+      const dx = p.x - medX;
+      const dz = p.z - medZ;
+      covXX += dx * dx;
+      covZZ += dz * dz;
+      covXZ += dx * dz;
+    }
+    bestAlpha = (0.5 * Math.atan2(2.0 * covXZ, covXX - covZZ) * (180.0 / Math.PI) + 360.0) % 90.0;
+  }
+
+  const radA = (bestAlpha * Math.PI) / 180.0;
+  const cosA = Math.cos(radA);
+  const sinA = Math.sin(radA);
+
+  const us = pts.map((p) => p.x * cosA + p.z * sinA);
+  const vs = pts.map((p) => -p.x * sinA + p.z * cosA);
+
+  const sortedU = [...us].sort((a, b) => a - b);
+  const sortedV = [...vs].sort((a, b) => a - b);
+  const medU = sortedU[Math.floor(sortedU.length * 0.5)];
+  const medV = sortedV[Math.floor(sortedV.length * 0.5)];
+
+  const binSize = 0.10;
+  const findWallPeak = (vals, med, belowMed) => {
+    const sub = belowMed
+      ? vals.filter((v) => v < med && v > med - 8.0)
+      : vals.filter((v) => v > med && v < med + 8.0);
+    if (sub.length === 0) {
+      const sorted = [...vals].sort((a, b) => a - b);
+      return belowMed ? sorted[Math.floor(sorted.length * 0.015)] : sorted[Math.floor(sorted.length * 0.985)];
+    }
+    const sortedSub = [...sub].sort((a, b) => a - b);
+    if (belowMed) {
+      const p1 = sortedSub[Math.floor(sortedSub.length * 0.01)];
+      const minV = p1 - 0.1;
+      const maxV = med;
+      const numBins = Math.max(5, Math.ceil((maxV - minV) / binSize));
+      const counts = new Array(numBins).fill(0);
+      for (const v of sortedSub) {
+        const idx = Math.floor((v - minV) / binSize);
+        if (idx >= 0 && idx < numBins) counts[idx]++;
+      }
+      let bestIdx = -1, maxCount = 0;
+      const cutoff = (med + p1 * 1.5) / 2.5;
+      for (let i = 0; i < numBins; i++) {
+        const center = minV + (i + 0.5) * binSize;
+        if (center < cutoff && counts[i] > maxCount) {
+          maxCount = counts[i];
+          bestIdx = i;
+        }
+      }
+      if (bestIdx >= 0 && maxCount > 15) return minV + (bestIdx + 0.5) * binSize;
+      return sortedSub[Math.floor(sortedSub.length * 0.02)];
+    } else {
+      const p99 = sortedSub[Math.floor(sortedSub.length * 0.99)];
+      const minV = med;
+      const maxV = p99 + 0.1;
+      const numBins = Math.max(5, Math.ceil((maxV - minV) / binSize));
+      const counts = new Array(numBins).fill(0);
+      for (const v of sortedSub) {
+        const idx = Math.floor((v - minV) / binSize);
+        if (idx >= 0 && idx < numBins) counts[idx]++;
+      }
+      const validCenters = [];
+      const validCounts = [];
+      let consecZeros = 0;
+      for (let i = 0; i < numBins; i++) {
+        if (counts[i] === 0) {
+          consecZeros++;
+          if (consecZeros > 5) break;
+        } else {
+          consecZeros = 0;
+          validCenters.push(minV + (i + 0.5) * binSize);
+          validCounts.push(counts[i]);
+        }
+      }
+      if (validCounts.length > 0) {
+        const lastCenter = validCenters[validCenters.length - 1];
+        const cutoff = (med + lastCenter) / 2.0;
+        let bestIdx = -1, maxCount = 0;
+        for (let i = 0; i < validCenters.length; i++) {
+          if (validCenters[i] > cutoff && validCounts[i] > maxCount) {
+            maxCount = validCounts[i];
+            bestIdx = i;
+          }
+        }
+        if (bestIdx >= 0 && maxCount > 15) return validCenters[bestIdx];
+      }
+      return sortedSub[Math.floor(sortedSub.length * 0.98)];
+    }
+  };
+
+  const uMin = findWallPeak(us, medU, true);
+  const uMax = findWallPeak(us, medU, false);
+  const vMin = findWallPeak(vs, medV, true);
+  const vMax = findWallPeak(vs, medV, false);
+
+  const cornersUV = [
+    [uMin, vMin],
+    [uMax, vMin],
+    [uMax, vMax],
+    [uMin, vMax],
   ];
 
-  const rotRad = (northOffset * Math.PI) / 180;
-  const cosR = Math.cos(rotRad);
-  const sinR = Math.sin(rotRad);
+  // Transform 4 corners back to Three.js world space (X, Z)
+  const box = cornersUV.map(([cu, cv]) => [
+    cu * cosA - cv * sinA,
+    cu * sinA + cv * cosA,
+  ]);
 
-  return (
-    <group position={[center[0], 0, center[2]]}>
-      {/* Rectangular room boundary floor outline */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.005, 0]}>
-        <planeGeometry args={[halfX * 2, halfZ * 2]} />
-        <meshBasicMaterial color="#3b6bff" wireframe opacity={0.25} transparent />
-      </mesh>
+  // Center of the 4 corners
+  const cx = box.reduce((sum, p) => sum + p[0], 0) / 4.0;
+  const cz = box.reduce((sum, p) => sum + p[1], 0) / 4.0;
 
-      {/* Cardinal & corner perimeter markers */}
-      {cardinals.map(({ label, relPos, color }) => {
-        const px = relPos[0] * cosR - relPos[1] * sinR;
-        const pz = relPos[0] * sinR + relPos[1] * cosR;
-        return (
-          <group key={label} position={[px, 0.02, pz]}>
-            <mesh rotation={[-Math.PI / 2, 0, 0]}>
-              <ringGeometry args={[0.15, 0.22, 24]} />
-              <meshBasicMaterial color={color} side={THREE.DoubleSide} />
-            </mesh>
-            <Html position={[0, 0.35, 0]} center distanceFactor={14}>
-              <div
-                style={{
-                  padding: "2px 8px",
-                  borderRadius: "12px",
-                  background: label === "N" ? "rgba(239, 68, 68, 0.25)" : "rgba(15, 23, 42, 0.85)",
-                  border: `1px solid ${color}`,
-                  color: color,
-                  fontSize: "11px",
-                  fontWeight: "700",
-                  pointerEvents: "none",
-                  userSelect: "none",
-                }}
-              >
-                {label}
-              </div>
-            </Html>
-          </group>
-        );
-      })}
-    </group>
-  );
+  // Unit vectors for North and East derived from northOffset
+  const rad = (northOffset * Math.PI) / 180.0;
+  const uNx = Math.sin(rad);
+  const uNz = -Math.cos(rad);
+  const uEx = Math.cos(rad);
+  const uEz = Math.sin(rad);
+
+  // 4 edges in cyclic order: (0,1), (1,2), (2,3), (3,0)
+  const edges = [
+    [0, 1],
+    [1, 2],
+    [2, 3],
+    [3, 0],
+  ];
+  const edgeMids = edges.map(([i, j]) => [
+    (box[i][0] + box[j][0]) / 2.0,
+    (box[i][1] + box[j][1]) / 2.0,
+  ]);
+
+  // Find North wall: edge midpoint with highest normalized alignment along North vector
+  const edgeAlignments = edgeMids.map((m) => {
+    const dx = m[0] - cx;
+    const dz = m[1] - cz;
+    const dist = Math.hypot(dx, dz) || 1e-6;
+    return (dx * uNx + dz * uNz) / dist;
+  });
+  let northEdgeIdx = 0;
+  let maxAlign = -Infinity;
+  edgeAlignments.forEach((align, idx) => {
+    if (align > maxAlign) {
+      maxAlign = align;
+      northEdgeIdx = idx;
+    }
+  });
+
+  const [iA, iB] = edges[northEdgeIdx];
+  const cA = box[iA];
+  const cB = box[iB];
+
+  // Of the two corners on the North wall, smaller East projection is NW, larger is NE
+  const projEA = (cA[0] - cx) * uEx + (cA[1] - cz) * uEz;
+  const projEB = (cB[0] - cx) * uEx + (cB[1] - cz) * uEz;
+
+  let idxNW, idxNE;
+  if (projEA < projEB) {
+    idxNW = iA;
+    idxNE = iB;
+  } else {
+    idxNW = iB;
+    idxNE = iA;
+  }
+
+  // Trace cyclically along the rectangle to assign SE and SW
+  const step = (idxNE - idxNW + 4) % 4 === 1 ? 1 : -1;
+  const idxSE = (idxNE + step + 4) % 4;
+  const idxSW = (idxSE + step + 4) % 4;
+
+  const NW = box[idxNW];
+  const NE = box[idxNE];
+  const SE = box[idxSE];
+  const SW = box[idxSW];
+
+  const yCoord = Number((Math.max(0, floorY) + 0.35).toFixed(3));
+  const mid = (p1, p2) => [
+    Number(((p1[0] + p2[0]) / 2.0).toFixed(3)),
+    yCoord,
+    Number(((p1[1] + p2[1]) / 2.0).toFixed(3)),
+  ];
+
+  const result = {
+    NW: [Number(NW[0].toFixed(3)), yCoord, Number(NW[1].toFixed(3))],
+    NE: [Number(NE[0].toFixed(3)), yCoord, Number(NE[1].toFixed(3))],
+    SE: [Number(SE[0].toFixed(3)), yCoord, Number(SE[1].toFixed(3))],
+    SW: [Number(SW[0].toFixed(3)), yCoord, Number(SW[1].toFixed(3))],
+    N: mid(NW, NE),
+    E: mid(NE, SE),
+    S: mid(SE, SW),
+    W: mid(SW, NW),
+  };
+
+  return result;
 }
 
 // ── 3D Model + auto-fit camera to bounding box ────────────────────────
@@ -100,70 +287,56 @@ function ModelWithCamera({
   controlsRef,
   onModelInfo,
   northOffset = 0,
+  serverBoundaryMarkers = null,
 }) {
   const { scene } = useGLTF(url);
   const { camera } = useThree();
   const groupRef = useRef();
   const [modelTransform, setModelTransform] = useState(null);
-  const [boundsInfo, setBoundsInfo] = useState(null);
+
+  // ── Override GLTF Materials to Unlit (MeshBasicMaterial) ──────────────
+  useEffect(() => {
+    if (scene) {
+      scene.traverse((child) => {
+        if (child.isMesh) {
+          child.frustumCulled = false;
+          child.castShadow = false;
+          child.receiveShadow = false;
+
+          const originalMap = child.material?.map || null;
+          const hasVertexColors = Boolean(child.material?.vertexColors || child.geometry?.attributes?.color);
+
+          if (originalMap) {
+            originalMap.colorSpace = THREE.SRGBColorSpace;
+          }
+
+          child.material = new THREE.MeshBasicMaterial({
+            map: originalMap,
+            vertexColors: hasVertexColors,
+            side: THREE.DoubleSide,
+            color: 0xffffff,
+          });
+          child.material.needsUpdate = true;
+        }
+      });
+    }
+  }, [scene]);
 
   useEffect(() => {
     if (!groupRef.current || !scene) return;
 
-    // 1. Ensure photogrammetry mesh renders with true photographic colors and zero shadow acne
-    scene.traverse((child) => {
-      if (child.isMesh) {
-        child.frustumCulled = false;
-        // Never cast self-shadows on complex photogrammetry scan mesh (eliminates shadow acne and black speckles)
-        child.castShadow = false;
-        child.receiveShadow = false;
-
-        if (child.material) {
-          child.material.side = THREE.DoubleSide;
-          child.material.depthWrite = true;
-          child.material.transparent = false;
-          child.material.opacity = 1.0;
-
-          if (child.material.map) {
-            child.material.map.colorSpace = THREE.SRGBColorSpace;
-            child.material.map.minFilter = THREE.LinearMipmapLinearFilter;
-            child.material.map.magFilter = THREE.LinearFilter;
-            child.material.map.generateMipmaps = true;
-            child.material.map.needsUpdate = true;
-          }
-
-          // Unlit photographic colors: renders exact camera photo pixels with zero shadow acne or dark blotches
-          if (!child.material.isMeshBasicMaterial) {
-            const oldMap = child.material.map;
-            child.material = new THREE.MeshBasicMaterial({
-              map: oldMap,
-              side: THREE.DoubleSide,
-              color: 0xffffff,
-            });
-          }
-          child.material.needsUpdate = true;
-        }
-      }
-    });
-
-    // 2. Reset transforms for accurate measurement
     groupRef.current.position.set(0, 0, 0);
     groupRef.current.scale.set(1, 1, 1);
     groupRef.current.rotation.set(0, 0, 0);
     groupRef.current.updateMatrixWorld(true);
 
-    // 3. Sample mesh vertices and normals to detect orientation & robust percentiles
     const xs = [];
     const ys = [];
     const zs = [];
-    let upNormals = 0;
-    let downNormals = 0;
 
     scene.traverse((child) => {
       if (child.isMesh && child.geometry?.attributes?.position) {
         const pos = child.geometry.attributes.position;
-        const norm = child.geometry.attributes.normal;
-        const index = child.geometry.index;
         const v = new THREE.Vector3();
         const step = Math.max(1, Math.floor(pos.count / 2500));
         for (let i = 0; i < pos.count; i += step) {
@@ -172,119 +345,23 @@ function ModelWithCamera({
           ys.push(v.y);
           zs.push(v.z);
         }
-
-        if (norm) {
-          const n = new THREE.Vector3();
-          for (let i = 0; i < norm.count; i += step) {
-            n.fromBufferAttribute(norm, i);
-            if (n.y > 0.4) upNormals++;
-            else if (n.y < -0.4) downNormals++;
-          }
-        } else if (index) {
-          // Direct face normal sampling when vertex normals are not present
-          const vA = new THREE.Vector3();
-          const vB = new THREE.Vector3();
-          const vC = new THREE.Vector3();
-          const cb = new THREE.Vector3();
-          const ab = new THREE.Vector3();
-          const fStep = Math.max(1, Math.floor(index.count / 3000)) * 3;
-          for (let i = 0; i < index.count - 2; i += fStep) {
-            vA.fromBufferAttribute(pos, index.getX(i));
-            vB.fromBufferAttribute(pos, index.getX(i + 1));
-            vC.fromBufferAttribute(pos, index.getX(i + 2));
-            cb.subVectors(vC, vB);
-            ab.subVectors(vA, vB);
-            cb.cross(ab).normalize();
-            if (cb.y > 0.35) upNormals++;
-            else if (cb.y < -0.35) downNormals++;
-          }
-        }
       }
     });
 
     if (xs.length < 10) return;
 
-    // In COLMAP / OpenMVS, cameras use OpenCV Y-down coordinates, so floor surfaces predominantly face -Y (downNormals > upNormals).
-    // An un-flipped COLMAP mesh needs rotationX = Math.PI to be upright (+Y up) in Three.js.
-    const isCOLMAPInverted = downNormals > upNormals || (upNormals === 0 && downNormals === 0);
-    const rotationX = isCOLMAPInverted ? Math.PI : 0;
+    const N = xs.length;
+    xs.sort((a, b) => a - b);
+    ys.sort((a, b) => a - b);
+    zs.sort((a, b) => a - b);
 
-    // Detect upward floor normal to level the room mesh horizontally
-    let floorNx = 0, floorNy = 0, floorNz = 0, floorCount = 0;
-    scene.traverse((child) => {
-      if (child.isMesh && child.geometry?.attributes?.position) {
-        const norm = child.geometry.attributes.normal;
-        if (norm) {
-          const n = new THREE.Vector3();
-          const step = Math.max(1, Math.floor(norm.count / 2500));
-          for (let i = 0; i < norm.count; i += step) {
-            n.fromBufferAttribute(norm, i);
-            const ny = isCOLMAPInverted ? -n.y : n.y;
-            const nz = isCOLMAPInverted ? -n.z : n.z;
-            const nx = n.x;
-            if (ny > 0.5) {
-              floorNx += nx; floorNy += ny; floorNz += nz;
-              floorCount++;
-            }
-          }
-        }
-      }
-    });
+    const p1_x = xs[Math.floor(N * 0.015)];
+    const p99_x = xs[Math.floor(N * 0.985)];
+    const p1_z = zs[Math.floor(N * 0.015)];
+    const p99_z = zs[Math.floor(N * 0.985)];
 
-    let tiltRotX = 0;
-    let tiltRotZ = 0;
-    if (floorCount > 20) {
-      floorNx /= floorCount; floorNy /= floorCount; floorNz /= floorCount;
-      const len = Math.hypot(floorNx, floorNy, floorNz) || 1;
-      floorNx /= len; floorNy /= len; floorNz /= len;
-      tiltRotX = -Math.atan2(floorNz, floorNy);
-      tiltRotZ = Math.atan2(floorNx, floorNy);
-    }
-
-    if (isCOLMAPInverted) {
-      const qFlip = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI);
-      const qLevel = new THREE.Quaternion().setFromEuler(new THREE.Euler(tiltRotX, 0, tiltRotZ, "XYZ"));
-      groupRef.current.quaternion.copy(qLevel.multiply(qFlip));
-    } else {
-      groupRef.current.rotation.set(tiltRotX, 0, tiltRotZ);
-    }
-    groupRef.current.rotation.setFromQuaternion(groupRef.current.quaternion, "XYZ");
-    groupRef.current.updateMatrixWorld(true);
-
-    // Sample vertices in world coordinate space (with rotation applied)
-    const worldXs = [];
-    const worldYs = [];
-    const worldZs = [];
-
-    scene.traverse((child) => {
-      if (child.isMesh && child.geometry?.attributes?.position) {
-        const pos = child.geometry.attributes.position;
-        const v = new THREE.Vector3();
-        const step = Math.max(1, Math.floor(pos.count / 2500));
-        for (let i = 0; i < pos.count; i += step) {
-          v.fromBufferAttribute(pos, i);
-          v.applyMatrix4(child.matrixWorld);
-          worldXs.push(v.x);
-          worldYs.push(v.y);
-          worldZs.push(v.z);
-        }
-      }
-    });
-
-    worldXs.sort((a, b) => a - b);
-    worldYs.sort((a, b) => a - b);
-    worldZs.sort((a, b) => a - b);
-
-    const N = worldXs.length;
-    // Robust 1.5% and 98.5% percentiles eliminate stray floating noise points
-    const p1_x = worldXs[Math.floor(N * 0.015)];
-    const p99_x = worldXs[Math.floor(N * 0.985)];
-    const p1_z = worldZs[Math.floor(N * 0.015)];
-    const p99_z = worldZs[Math.floor(N * 0.985)];
-
-    // Floor and ceiling
-    const floorY = worldYs[Math.floor(N * 0.025)];
-    const ceilingY = worldYs[Math.floor(N * 0.975)];
+    const floorY = ys[Math.floor(N * 0.025)];
+    const ceilingY = ys[Math.floor(N * 0.975)];
     const rawHeight = Math.max(1.0, ceilingY - floorY);
 
     const centerX = (p1_x + p99_x) / 2;
@@ -293,42 +370,13 @@ function ModelWithCamera({
     const spanX = Math.max(2.0, p99_x - p1_x);
     const spanZ = Math.max(2.0, p99_z - p1_z);
 
-    // Normalize height if unrealistically large (> 5.5m) or small (< 2.2m)
-    let modelScale = 1.0;
-    if (rawHeight > 5.5 || rawHeight < 2.2) {
-      modelScale = THREE.MathUtils.clamp(3.8 / rawHeight, 0.4, 2.5);
-    }
+    const finalPos = [0, 0, 0];
+    const finalRotation = [0, 0, 0];
+    const modelScale = 1.0;
 
-    // Check if mesh is already pre-enhanced, leveled, and canonical
-    const isPreEnhanced = !isCOLMAPInverted &&
-      Math.abs(tiltRotX) < 0.08 &&
-      Math.abs(tiltRotZ) < 0.08 &&
-      Math.abs(centerX) < 0.8 &&
-      Math.abs(centerZ) < 0.8 &&
-      Math.abs(floorY) < 0.35 &&
-      rawHeight >= 2.0 && rawHeight <= 5.5;
-
-    let finalPos = [-centerX * modelScale, -floorY * modelScale, -centerZ * modelScale];
-    let finalRotation = [groupRef.current.rotation.x, groupRef.current.rotation.y, groupRef.current.rotation.z];
-
-    if (isPreEnhanced) {
-      // Keep exact 1:1 world coordinate correspondence with ForensicSimulation
-      groupRef.current.position.set(0, 0, 0);
-      groupRef.current.rotation.set(0, 0, 0);
-      groupRef.current.scale.set(1, 1, 1);
-      groupRef.current.updateMatrixWorld(true);
-      modelScale = 1.0;
-      finalPos = [0, 0, 0];
-      finalRotation = [0, 0, 0];
-    } else {
-      groupRef.current.scale.setScalar(modelScale);
-      groupRef.current.position.set(finalPos[0], finalPos[1], finalPos[2]);
-      groupRef.current.updateMatrixWorld(true);
-    }
-
-    const finalSizeX = spanX * modelScale;
-    const finalSizeY = rawHeight * modelScale;
-    const finalSizeZ = spanZ * modelScale;
+    const finalSizeX = spanX;
+    const finalSizeY = rawHeight;
+    const finalSizeZ = spanZ;
 
     setModelTransform({
       position: finalPos,
@@ -336,16 +384,13 @@ function ModelWithCamera({
       rotation: finalRotation,
     });
 
-    setBoundsInfo({
-      width: finalSizeX,
-      height: finalSizeY,
-      depth: finalSizeZ,
-    });
-
     const maxSpan = Math.max(finalSizeX, finalSizeZ);
     const roomRadius = Math.min(finalSizeX, finalSizeZ) * 0.44;
 
-    // Position camera to look directly into the centered room at actor height (1.2m)
+    const targetX = centerX;
+    const targetY = floorY + 1.2;
+    const targetZ = centerZ;
+
     const fovRad = (camera.fov * Math.PI) / 180;
     const dist = (maxSpan / 2 / Math.tan(fovRad / 2)) * 1.25;
     const camY = THREE.MathUtils.clamp(finalSizeY * 0.65, 1.8, 4.5);
@@ -353,38 +398,48 @@ function ModelWithCamera({
     const rad = ((northOffset || 0) * Math.PI) / 180;
     const nx = Math.sin(rad);
     const nz = -Math.cos(rad);
-    camera.position.set(-nx * dist, camY, -nz * dist);
+    camera.position.set(targetX - nx * dist, floorY + camY, targetZ - nz * dist);
     camera.near = 0.05;
     camera.far = maxSpan * 50;
     camera.updateProjectionMatrix();
 
     if (controlsRef?.current) {
-      controlsRef.current.target.set(0, 1.2, 0);
+      controlsRef.current.target.set(targetX, targetY, targetZ);
       controlsRef.current.update();
     }
 
+    const worldVerts = [];
+    scene.traverse((child) => {
+      if (child.isMesh && child.geometry?.attributes?.position) {
+        const pos = child.geometry.attributes.position;
+        const v = new THREE.Vector3();
+        const step = Math.max(1, Math.floor(pos.count / 2500));
+        for (let i = 0; i < pos.count; i += step) {
+          v.fromBufferAttribute(pos, i);
+          v.applyMatrix4(child.matrixWorld);
+          worldVerts.push({ x: v.x, y: v.y, z: v.z });
+        }
+      }
+    });
+
+    let boundaryMarkers = serverBoundaryMarkers || computeRoomBoundaryMarkers(worldVerts, northOffset);
+
     if (onModelInfo) {
       onModelInfo({
-        center: [0, 0, 0],
-        floorY: 0,
+        center: [centerX, floorY, centerZ],
+        floorY,
         size: [finalSizeX, finalSizeY, finalSizeZ],
         radius: roomRadius,
         maxDim: maxSpan,
         modelScale,
+        boundaryMarkers,
       });
     }
-  }, [scene, url, northOffset]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [scene, url, northOffset, serverBoundaryMarkers]);
 
   return (
-    <group>
-      <group
-        ref={groupRef}
-        position={modelTransform ? modelTransform.position : [0, 0, 0]}
-        scale={modelTransform ? modelTransform.scale : 1}
-        rotation={modelTransform ? modelTransform.rotation : [0, 0, 0]}
-      >
-        <primitive object={scene} />
-      </group>
+    <group ref={groupRef} position={modelTransform ? modelTransform.position : [0, 0, 0]}>
+      <primitive object={scene} />
     </group>
   );
 }
@@ -396,15 +451,67 @@ function CameraTracker({ azimuthRef, controlsRef }) {
     if (!controlsRef.current?.object) return;
     const cam = controlsRef.current.object;
     cam.getWorldDirection(dirVec.current);
-    // In Three.js: -Z is North (0°), +X is East (90°), +Z is South (180°), -X is West (270°)
     const az = (Math.atan2(dirVec.current.x, -dirVec.current.z) * (180 / Math.PI) + 360) % 360;
     azimuthRef.current = az;
   });
   return null;
 }
 
-// ── 3D Direction Markers (8 Directions, dynamically mapped to room walls & corners) ───────
-function DirectionMarkers({ northOffset = 0, target = [0, 0, 0], radius = 2.4, roomSize = null, onSelectDirection }) {
+// ── Direction Box 3D Perimeter Outline ──
+function DirectionBoxOutline({ markers }) {
+  const lineObj = useMemo(() => {
+    if (!markers || !markers.NW || !markers.NE || !markers.SE || !markers.SW) return null;
+    const pts = [
+      new THREE.Vector3(markers.NW[0], markers.NW[1], markers.NW[2]),
+      new THREE.Vector3(markers.NE[0], markers.NE[1], markers.NE[2]),
+      new THREE.Vector3(markers.SE[0], markers.SE[1], markers.SE[2]),
+      new THREE.Vector3(markers.SW[0], markers.SW[1], markers.SW[2]),
+      new THREE.Vector3(markers.NW[0], markers.NW[1], markers.NW[2]),
+    ];
+    const geom = new THREE.BufferGeometry().setFromPoints(pts);
+    const mat = new THREE.LineBasicMaterial({
+      color: 0xef4444,
+      transparent: true,
+      opacity: 0.75,
+      linewidth: 2,
+    });
+    return new THREE.Line(geom, mat);
+  }, [markers]);
+
+  return lineObj ? <primitive object={lineObj} /> : null;
+}
+
+// ── 3D Direction Markers ──
+function DirectionMarkers({ markers, northOffset = 0, target = [0, 0, 0], radius = 2.4, roomSize = null, onSelectDirection }) {
+  if (markers && Object.keys(markers).length > 0) {
+    return (
+      <group>
+        <DirectionBoxOutline markers={markers} />
+        {Object.entries(markers).map(([label, pos]) => {
+          const isNorth = label === "N";
+          const isPrimary = ["N", "S", "E", "W"].includes(label);
+          return (
+            <Html key={label} position={[pos[0], pos[1], pos[2]]} center distanceFactor={18}>
+              <div
+                className={`dir-marker ${
+                  isNorth ? "dir-north" : !isPrimary ? "dir-intercardinal" : ""
+                }`}
+                style={{ cursor: "pointer", pointerEvents: "auto" }}
+                title={`Click to face ${label}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelectDirection?.(label);
+                }}
+              >
+                {label}
+              </div>
+            </Html>
+          );
+        })}
+      </group>
+    );
+  }
+
   const halfX = roomSize ? roomSize[0] * 0.48 : Math.max(2.4, (radius || 2.6) * 0.95);
   const halfZ = roomSize ? roomSize[2] * 0.48 : Math.max(2.4, (radius || 2.6) * 0.95);
 
@@ -426,7 +533,6 @@ function DirectionMarkers({ northOffset = 0, target = [0, 0, 0], radius = 2.4, r
   return (
     <>
       {cardinals.map(({ label, relPos, isPrimary, isNorth }) => {
-        // Position in XZ plane: pure walls at N (-Z), S (+Z), E (+X), W (-X) and corners at diagonals
         const rx = relPos[0] * cosR - relPos[1] * sinR;
         const rz = relPos[0] * sinR + relPos[1] * cosR;
         const px = target[0] + rx;
@@ -438,7 +544,7 @@ function DirectionMarkers({ northOffset = 0, target = [0, 0, 0], radius = 2.4, r
               className={`dir-marker ${
                 isNorth ? "dir-north" : !isPrimary ? "dir-intercardinal" : ""
               }`}
-              style={{ cursor: "pointer" }}
+              style={{ cursor: "pointer", pointerEvents: "auto" }}
               title={`Click to face ${label}`}
               onClick={(e) => {
                 e.stopPropagation();
@@ -454,7 +560,7 @@ function DirectionMarkers({ northOffset = 0, target = [0, 0, 0], radius = 2.4, r
   );
 }
 
-// ── Compass Rose (HTML overlay, outside Canvas) ───────────────────────
+// ── Compass Rose (HTML overlay) ──
 function CompassOverlay({ azimuthRef, northOffset = 0, onAlignDirection }) {
   const roseRef = useRef(null);
   const [facing, setFacing] = useState("—");
@@ -462,15 +568,13 @@ function CompassOverlay({ azimuthRef, northOffset = 0, onAlignDirection }) {
   useEffect(() => {
     let raf;
     const tick = () => {
-      const az = azimuthRef.current;
+      const az = azimuthRef?.current || 0;
       const rot = -az + northOffset;
 
       if (roseRef.current) {
-        // SVG-native rotate(angle, cx, cy) — pivot always at SVG centre (70,70).
         roseRef.current.setAttribute("transform", `rotate(${rot}, 70, 70)`);
       }
 
-      // Facing direction readout
       const norm = ((az - northOffset) % 360 + 360) % 360;
       setFacing(DIRECTIONS[Math.round(norm / 45) % 8]);
 
@@ -482,35 +586,18 @@ function CompassOverlay({ azimuthRef, northOffset = 0, onAlignDirection }) {
 
   return (
     <div className="compass-container calibrated">
-      {/* Compass rose */}
-      <div
-        className="compass-card"
-        title="Compass · Click to face North"
-      >
-        {/* Heading indicator (fixed at top) */}
+      <div className="compass-card" title="Compass · Click to face North">
         <div className="compass-heading-pin" />
 
-        <svg
-          viewBox="0 0 140 140"
-          className="compass-svg"
-          onClick={() => onAlignDirection?.("N")}
-          style={{ cursor: "pointer" }}
-        >
+        <svg viewBox="0 0 140 140" className="compass-svg" onClick={() => onAlignDirection?.("N")} style={{ cursor: "pointer" }}>
           <defs>
-            {/* Clip the rotating rose so needles/labels never bleed outside the bezel */}
             <clipPath id="compass-rose-clip">
               <circle cx="70" cy="70" r="62" />
             </clipPath>
           </defs>
 
-          {/* Outer bezel (fixed) */}
-          <circle cx="70" cy="70" r="66"
-            fill="rgba(10,11,16,0.9)"
-            stroke="rgba(59,107,255,0.6)"
-            strokeWidth="1.5"
-          />
+          <circle cx="70" cy="70" r="66" fill="rgba(10,11,16,0.9)" stroke="rgba(59,107,255,0.6)" strokeWidth="1.5" />
 
-          {/* Degree tick marks (fixed ring) */}
           {Array.from({ length: 36 }, (_, i) => {
             const a = i * 10;
             const rad = (a - 90) * Math.PI / 180;
@@ -525,14 +612,10 @@ function CompassOverlay({ azimuthRef, northOffset = 0, onAlignDirection }) {
             );
           })}
 
-          {/* Rotating rose group — SVG-native transform, clipped inside bezel */}
           <g ref={roseRef} clipPath="url(#compass-rose-clip)">
-            {/* North needle (red) */}
             <polygon points="70,14 65,68 70,60 75,68" fill="#ff4444" opacity="0.95" />
-            {/* South needle (dark) */}
             <polygon points="70,126 65,72 70,80 75,72" fill="#2d3348" />
 
-            {/* Cardinal N/E/S/W labels */}
             {[
               { l: "N", a: 0, color: "#ff6b6b", fw: 700, fs: 13 },
               { l: "E", a: 90, color: "#a0aec0", fw: 600, fs: 11 },
@@ -550,16 +633,10 @@ function CompassOverlay({ azimuthRef, northOffset = 0, onAlignDirection }) {
                   fontSize={fs}
                   fontWeight={fw}
                   fontFamily="Inter, system-ui, sans-serif"
-                  style={{ cursor: "pointer" }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onAlignDirection?.(l);
-                  }}
                 >{l}</text>
               );
             })}
 
-            {/* Intercardinal labels */}
             {[
               { l: "NE", a: 45 }, { l: "SE", a: 135 },
               { l: "SW", a: 225 }, { l: "NW", a: 315 },
@@ -573,22 +650,15 @@ function CompassOverlay({ azimuthRef, northOffset = 0, onAlignDirection }) {
                   fill="#3d4560"
                   fontSize="8"
                   fontFamily="Inter, system-ui, sans-serif"
-                  style={{ cursor: "pointer" }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onAlignDirection?.(l);
-                  }}
                 >{l}</text>
               );
             })}
           </g>
 
-          {/* Center hub (fixed, rendered on top of rose) */}
           <circle cx="70" cy="70" r="5.5" fill="#1a1d28" stroke="#3d4560" strokeWidth="1" />
           <circle cx="70" cy="70" r="3" fill="#e8eaf0" />
         </svg>
 
-        {/* Current facing direction readout */}
         <div className="compass-readout">
           <span className="readout-label">Facing</span>
           <span className="readout-value">{facing}</span>
@@ -609,36 +679,13 @@ function CompassOverlay({ azimuthRef, northOffset = 0, onAlignDirection }) {
   );
 }
 
-// ── Upload Icon SVG ───────────────────────────────────────────────────
-function UploadIcon({ small = false }) {
-  const s = small ? 32 : 48;
-  return (
-    <svg className={small ? "upload-icon-sm" : "upload-icon"} viewBox="0 0 48 48" fill="none" width={s} height={s}>
-      <rect x="6" y="30" width="36" height="12" rx="4" stroke="#8b90a4" strokeWidth="2" />
-      <rect x="6" y="6" width="36" height="22" rx="4" stroke="#8b90a4" strokeWidth="2" />
-      <path d="M18 17l6-6 6 6M24 11v14" stroke="#8b90a4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-// ── Building placeholder ──────────────────────────────────────────────
-function BuildingIcon() {
-  return (
-    <svg className="placeholder-icon" viewBox="0 0 80 80" fill="none">
-      <rect x="8" y="20" width="64" height="52" rx="3" stroke="#8b90a4" strokeWidth="2.5" />
-      <path d="M8 32h64M28 20v52M52 20v52" stroke="#8b90a4" strokeWidth="2" />
-      <path d="M16 14h48M22 8h36" stroke="#8b90a4" strokeWidth="2" strokeLinecap="round" />
-      <rect x="34" y="50" width="12" height="22" rx="2" fill="#8b90a4" opacity="0.3" />
-    </svg>
-  );
-}
-
-// ── Sidebar ───────────────────────────────────────────────────────────
+// ── Sidebar ──
 function Sidebar({
   files, isDragOver, fileInputRef,
   onDrop, onDragOver, onDragLeave, onFileChange, onZoneClick,
   status, logs, onGenerate, onReset, isRunning,
   onOpenThreatDetection,
+  onFlipModel, isFlipping, hasModel,
 }) {
   const dotClass =
     status.done ? "done"
@@ -656,7 +703,6 @@ function Sidebar({
 
   return (
     <aside className="sidebar">
-      {/* ── Header */}
       <div className="sidebar-header">
         <div className="logo-icon">
           <svg viewBox="0 0 24 24">
@@ -670,7 +716,6 @@ function Sidebar({
         </div>
       </div>
 
-      {/* ── Scene Photos Upload */}
       <div className="sidebar-section">
         <div className="section-label">Scene Photos</div>
         <div
@@ -680,7 +725,6 @@ function Sidebar({
           onDragOver={onDragOver}
           onDragLeave={onDragLeave}
         >
-          <UploadIcon />
           <div className="upload-label">
             Drag &amp; drop photos here<br />
             <span>or click to browse</span>
@@ -694,22 +738,33 @@ function Sidebar({
           multiple style={{ display: "none" }} onChange={onFileChange} />
       </div>
 
-      {/* ── Actions */}
       <div className="sidebar-actions">
         <button id="btn-generate" className="btn-generate"
           onClick={onGenerate}
           disabled={files.length === 0 || (isRunning && !status.error)}
         >
           {isRunning && !status.error
-            ? <><div className="spinner" /> Processing…</>
+            ? "Processing…"
             : status.error
-              ? <><span className="btn-icon">↺</span> Retry 3D Generation</>
-              : <><span className="btn-icon">✦</span> Generate 3D Room</>}
+              ? "↺ Retry 3D Generation"
+              : "✦ Generate 3D Room"}
         </button>
         {(files.length > 0 || status.done || status.error) && (
           <button id="btn-reset" className="btn-reset"
             onClick={onReset} disabled={isRunning && !status.error}>
             ↺ Reset
+          </button>
+        )}
+        {hasModel && (
+          <button
+            type="button"
+            id="btn-sidebar-flip"
+            className="btn-flip-sidebar"
+            onClick={onFlipModel}
+            disabled={isRunning || isFlipping}
+            title="Invert 3D room orientation 180° along X-axis"
+          >
+            {isFlipping ? "🔄 Flipping Orientation…" : "🔄 Flip Orientation"}
           </button>
         )}
         <button
@@ -722,87 +777,53 @@ function Sidebar({
         </button>
       </div>
 
-      {/* ── Status */}
       <div className="status-row">
         <div className={`status-dot ${dotClass}`} />
         <span>{statusText}</span>
       </div>
 
-      {/* ── Progress */}
-      {(isRunning || status.progress > 0) && (
-        <div className="progress-section">
-          <div className="progress-header">
-            <span>{status.phase || "Initialising"}</span>
-            <span>{status.progress}%</span>
-          </div>
-          <div className="progress-track">
-            <div className="progress-fill" style={{ width: `${status.progress}%` }} />
-          </div>
-        </div>
-      )}
-
-      {/* ── Log Console */}
       {logs.length > 0 && (
         <div className="log-section">
           <div className="log-title">Console</div>
-          <LogConsole logs={logs} />
+          <div className="log-console">
+            {logs.map((line, i) => (
+              <div key={i} className="log-line">{line}</div>
+            ))}
+          </div>
         </div>
       )}
     </aside>
   );
 }
 
-// Auto-scrolling log console
-function LogConsole({ logs }) {
-  const bottomRef = useRef(null);
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [logs]);
-
-  return (
-    <div className="log-console">
-      {logs.map((line, i) => {
-        const cls =
-          line.includes("ERROR") || line.includes("error") ? "error"
-            : line.includes("DONE") || line.includes("complete") ? "success"
-              : line.startsWith("$") ? "highlight"
-                : "";
-        return <div key={i} className={`log-line ${cls}`}>{line}</div>;
-      })}
-      <div ref={bottomRef} />
-    </div>
-  );
-}
-
 // ── Main App ──────────────────────────────────────────────────────────
 export default function App() {
-  // View mode tab: "3d_scene" (3D Room Reconstruction) or "recreation" (Crime Recreation Studio)
   const [activeTab, setActiveTab] = useState("3d_scene");
 
-  // Scene photos
   const [files, setFiles] = useState([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef(null);
 
-  // Compass calibration - default North aligns room symmetrically
   const [northOffset, setNorthOffset] = useState(0);
   const [compassCalibrated, setCalibrated] = useState(true);
-  const azimuthRef = useRef(0); // live camera azimuth (updated each frame)
+  const azimuthRef = useRef(0);
   const controlsRef = useRef(null);
   const canvasRef = useRef(null);
 
-  // Reconstruction state
   const [status, setStatus] = useState({ phase: "idle", log: "", progress: 0, done: false, error: null });
   const [logs, setLogs] = useState([]);
   const [isRunning, setIsRunning] = useState(false);
   const [modelUrl, setModelUrl] = useState(null);
+  const [flipKey, setFlipKey] = useState(0);
   const [modelKey, setModelKey] = useState(0);
+  const [isFlipping, setIsFlipping] = useState(false);
   const [modelInfo, setModelInfo] = useState(null);
   const sseRef = useRef(null);
 
-  // ── Crime Recreation & Video Simulation State ────────────────────────
+  // ── Crime Recreation State ──────────────────────────────────────────
   const [planData, setPlanData] = useState(null);
   const [sceneObjects, setSceneObjects] = useState([]);
+  const [serverBoundaryMarkers, setServerBoundaryMarkers] = useState(null);
   const [isPlanning, setIsPlanning] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -811,17 +832,70 @@ export default function App() {
   const [showRoutes, setShowRoutes] = useState(true);
   const [showLabels, setShowLabels] = useState(true);
   const [showAnchors, setShowAnchors] = useState(false);
+  const [dummyHeightMultiplier, setDummyHeightMultiplier] = useState(1.0);
   const [geminiApiKey, setGeminiApiKey] = useState(
     () => localStorage.getItem("forensic_gemini_key") || ""
   );
 
-  // ── Fetch physical room objects and 8-direction labels ───────────────
+  // ── Accident Simulation State ─────────────────────────────────────────
+  const [accidentPlanData, setAccidentPlanData] = useState(null);
+  const [isAccidentPlanning, setIsAccidentPlanning] = useState(false);
+  const [accidentCameraMode, setAccidentCameraMode] = useState("orbit");
+
+  const handleGenerateAccidentPlan = useCallback(async (promptText) => {
+    setIsAccidentPlanning(true);
+    try {
+      const res = await fetch(`${API}/api/accident/plan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: promptText,
+          apiKey: geminiApiKey || undefined,
+          directionMeta: { northOffset: northOffset || 0 }
+        }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `Server responded with ${res.status}`);
+      }
+
+      const data = await res.json();
+      setAccidentPlanData(data);
+      setCurrentTime(0);
+      setIsPlaying(true);
+    } catch (err) {
+      console.error("Accident simulation error:", err);
+      alert(`Error simulating crash: ${err.message}`);
+    } finally {
+      setIsAccidentPlanning(false);
+    }
+  }, [geminiApiKey, northOffset]);
+
+  const activePlan = useMemo(() => {
+    if (activeTab === "accident") return accidentPlanData?.plan;
+    if (activeTab === "recreation") return planData?.plan;
+    return null;
+  }, [activeTab, accidentPlanData, planData]);
+
+  const duration = activePlan?.duration || 10;
+
+  const activeCaption = useMemo(() => {
+    if (!activePlan?.captions) return "";
+    let cap = "";
+    for (const c of activePlan.captions) {
+      if (c.t <= currentTime) cap = c.text;
+    }
+    return cap;
+  }, [activePlan, currentTime]);
+
   const fetchSceneObjects = useCallback(async () => {
     try {
       const r = await fetch(`${API}/api/scene/objects`);
       if (r.ok) {
         const data = await r.json();
         if (data.objects) setSceneObjects(data.objects);
+        if (data.boundaryMarkers) setServerBoundaryMarkers(data.boundaryMarkers);
         if (data.northOffset !== undefined) {
           setNorthOffset(data.northOffset);
           setCalibrated(true);
@@ -830,20 +904,53 @@ export default function App() {
     } catch (_) {}
   }, []);
 
-  // ── On mount / page refresh: clean up any earlier models so the user starts fresh ──
   useEffect(() => {
-    setModelUrl(null);
-    setModelInfo(null);
-    setPlanData(null);
-    setSceneObjects([]);
-    setStatus({ phase: "idle", log: "", progress: 0, done: false, error: null });
-    // Tell backend to thoroughly clean up previous model artifacts
-    fetch(`${API}/api/reset`, { method: "POST" }).catch(() => {});
-  }, []);
+    fetch(`/models/scene_textured.glb`, { method: "HEAD" })
+      .then((r) => {
+        if (r.ok) {
+          setModelUrl("/models/scene_textured.glb");
+          fetchSceneObjects();
+        } else {
+          setModelUrl(null);
+        }
+      })
+      .catch(() => {});
+  }, [fetchSceneObjects]);
+
+  const handleFlipModel = useCallback(async () => {
+    if (isFlipping) return;
+    setIsFlipping(true);
+    try {
+      const res = await fetch(`${API}/api/flip-model`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || `Server responded with ${res.status}`);
+      }
+
+      const data = await res.json();
+      if (data.boundaryMarkers) setServerBoundaryMarkers(data.boundaryMarkers);
+      if (data.northOffset !== undefined) {
+        setNorthOffset(data.northOffset);
+        setCalibrated(true);
+      }
+      if (data.objects) setSceneObjects(data.objects);
+
+      useGLTF.clear(`/models/scene_textured.glb?v=${flipKey}`);
+      useGLTF.clear("/models/scene_textured.glb");
+
+      setFlipKey((prev) => prev + 1);
+      fetchSceneObjects();
+    } catch (err) {
+      alert(`Error flipping room orientation: ${err.message}`);
+    } finally {
+      setIsFlipping(false);
+    }
+  }, [isFlipping, fetchSceneObjects, flipKey]);
 
   const modelUrlToLoad = modelUrl;
 
-  // ── Plan generation handler ──────────────────────────────────────────
   const handleGenerateRecreationPlan = useCallback(
     async (promptText) => {
       setIsPlanning(true);
@@ -851,13 +958,15 @@ export default function App() {
         const halfX = (modelInfo?.size?.[0] || 6.0) / 2;
         const halfZ = (modelInfo?.size?.[2] || 6.0) / 2;
         const heightY = modelInfo?.size?.[1] || 3.8;
-        const boundsPayload = {
+        const fallbackBounds = {
           min: [-halfX, 0, -halfZ],
           max: [halfX, heightY, halfZ],
           center: [0, 0, 0],
           size: [halfX * 2, heightY, halfZ * 2],
           radius: modelInfo?.radius || Math.hypot(halfX, halfZ) * 0.7,
         };
+        const boundsPayload = modelInfo?.bounds || fallbackBounds;
+        const effectiveMarkers = modelInfo?.boundaryMarkers || serverBoundaryMarkers;
 
         const res = await fetch(`${API}/api/recreation/plan`, {
           method: "POST",
@@ -866,6 +975,7 @@ export default function App() {
             prompt: promptText,
             apiKey: geminiApiKey || undefined,
             bounds: boundsPayload,
+            boundaryMarkers: effectiveMarkers,
             directionMeta: {
               direction: "N",
               northOffset: northOffset || 0,
@@ -884,30 +994,25 @@ export default function App() {
         setCurrentTime(0);
         setIsPlaying(true);
       } catch (err) {
-        console.error("Recreation plan error:", err);
         alert(`Error generating simulation: ${err.message}`);
       } finally {
         setIsPlanning(false);
       }
     },
-    [geminiApiKey, modelInfo, northOffset, compassCalibrated]
+    [geminiApiKey, modelInfo, serverBoundaryMarkers, northOffset]
   );
 
-  // ── Auto-load saved recreation plan if available on server ───────────
   useEffect(() => {
     fetch(`${API}/api/recreation/plan`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (data?.plan) {
           setPlanData(data);
-          setCurrentTime(0);
         }
       })
       .catch(() => {});
   }, []);
 
-  // ── Clock tick handler ───────────────────────────────────────────────
-  const duration = planData?.plan?.duration || 10;
   const handleClockTick = useCallback(
     (deltaSec) => {
       setCurrentTime((prev) => {
@@ -922,24 +1027,12 @@ export default function App() {
     [duration]
   );
 
-  // ── Active narrative caption computed from timeline ──────────────────
-  const activeCaption = useMemo(() => {
-    if (!planData?.plan?.captions) return "";
-    let cap = "";
-    for (const c of planData.plan.captions) {
-      if (c.t <= currentTime) cap = c.text;
-    }
-    return cap;
-  }, [planData, currentTime]);
-
-  // ── Gemini API key storage ───────────────────────────────────────────
   const handleApiKeyChange = useCallback((newKey) => {
     setGeminiApiKey(newKey);
     if (newKey) localStorage.setItem("forensic_gemini_key", newKey);
     else localStorage.removeItem("forensic_gemini_key");
   }, []);
 
-  // ── SSE connection ───────────────────────────────────────────────────
   useEffect(() => {
     const es = new EventSource(`${API}/api/status`);
     sseRef.current = es;
@@ -949,8 +1042,15 @@ export default function App() {
       if (data.log) setLogs((p) => [...p.slice(-200), data.log]);
       if (data.done) {
         setIsRunning(false);
-        setModelUrl(`${API}/models/scene_textured.glb?t=${Date.now()}`);
-        setModelKey((k) => k + 1);
+        useGLTF.clear("/models/scene_textured.glb");
+        setModelUrl("/models/scene_textured.glb");
+        setFlipKey((prev) => prev + 1);
+        if (data.boundaryMarkers) setServerBoundaryMarkers(data.boundaryMarkers);
+        if (data.northOffset !== undefined) {
+          setNorthOffset(data.northOffset);
+          setCalibrated(true);
+        }
+        if (data.objects) setSceneObjects(data.objects);
         fetchSceneObjects();
       }
       if (data.error || data.phase === "error") {
@@ -960,7 +1060,6 @@ export default function App() {
     return () => es.close();
   }, [fetchSceneObjects]);
 
-  // ── Align 3D Camera to Cardinal Direction (e.g. North) ────────────────
   const alignCameraToDirection = useCallback(
     (dir = "N") => {
       if (!controlsRef.current) return;
@@ -980,7 +1079,6 @@ export default function App() {
     [northOffset]
   );
 
-  // ── Scene photo handling ─────────────────────────────────────────────
   const handleDrop = useCallback((e) => {
     e.preventDefault();
     setIsDragOver(false);
@@ -1007,7 +1105,6 @@ export default function App() {
   }, []);
   const handleZoneClick = useCallback(() => fileInputRef.current?.click(), []);
 
-  // ── 3D Reconstruction Generate ───────────────────────────────────────
   const handleGenerate = useCallback(async () => {
     if (!files.length) return;
     setIsRunning(true);
@@ -1018,7 +1115,6 @@ export default function App() {
     setPlanData(null);
     setSceneObjects([]);
 
-    // Clear any previous session models and images so different batches don't mix
     await fetch(`${API}/api/reset`, { method: "POST" }).catch(() => {});
 
     const form = new FormData();
@@ -1043,13 +1139,13 @@ export default function App() {
     }
   }, [files]);
 
-  // ── Reset ────────────────────────────────────────────────────────────
   const handleReset = useCallback(async () => {
     setFiles([]);
     setLogs([]);
     setModelUrl(null);
     setModelInfo(null);
     setPlanData(null);
+    setAccidentPlanData(null);
     setSceneObjects([]);
     setStatus({ phase: "idle", log: "", progress: 0, done: false, error: null });
     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -1058,6 +1154,9 @@ export default function App() {
 
   const sceneCenter = [0, 0, 0];
   const sceneRadius = modelInfo?.radius || 2.4;
+  const roomHeight = modelInfo?.size?.[1] || planData?.plan?.roomHeight || 2.85;
+  const effectiveDummyScale = Math.min(2.5, Math.max(0.4, (roomHeight / 2.85) * dummyHeightMultiplier));
+  const dummyHeightMeters = Number((1.80 * effectiveDummyScale).toFixed(2));
 
   return (
     <div className="app">
@@ -1076,10 +1175,13 @@ export default function App() {
         onReset={handleReset}
         isRunning={isRunning}
         onOpenThreatDetection={() => setActiveTab("threat_detection")}
+        onFlipModel={handleFlipModel}
+        isFlipping={isFlipping}
+        hasModel={Boolean(modelUrlToLoad || status.done)}
       />
 
       {/* ── 3D Viewer & Simulation Canvas ── */}
-      <main className={`viewer-area ${activeTab === "recreation" ? "recreation-mode" : ""} ${activeTab === "threat_detection" ? "threat-mode" : ""}`}>
+      <main className={`viewer-area ${(activeTab === "recreation" || activeTab === "accident") ? "recreation-mode" : ""} ${activeTab === "threat_detection" ? "threat-mode" : ""}`}>
         <div className="viewer-topbar">
           <div className="viewer-topbar-left">
             <span
@@ -1100,9 +1202,24 @@ export default function App() {
             >
               🔬 Threat & Evidence Analysis
             </span>
+            <span
+              className={`viewer-tab ${activeTab === "accident" ? "active" : ""}`}
+              onClick={() => {
+                setActiveTab("accident");
+                setCurrentTime(0);
+                setIsPlaying(false);
+                if (controlsRef.current) {
+                  controlsRef.current.target.set(0, 0, 0);
+                  controlsRef.current.object.position.set(0, 14, 22);
+                  controlsRef.current.update();
+                }
+              }}
+            >
+              🚗 Accident Reconstruction Studio
+            </span>
 
-            {activeTab !== "threat_detection" && modelUrl && <span className="viewer-badge">✓ 3D Mesh Active</span>}
-            {activeTab !== "threat_detection" && (
+            {activeTab !== "threat_detection" && activeTab !== "accident" && modelUrl && <span className="viewer-badge">✓ 3D Mesh Active</span>}
+            {activeTab !== "threat_detection" && activeTab !== "accident" && (
               <button
                 id="btn-face-direction"
                 className="btn-face-quick"
@@ -1112,10 +1229,21 @@ export default function App() {
                 🎯 Face North
               </button>
             )}
+            {activeTab !== "threat_detection" && activeTab !== "accident" && modelUrl && (
+              <button
+                id="btn-flip-orientation"
+                className="btn-face-quick btn-flip-quick"
+                title="Invert 3D room orientation 180° along X-axis"
+                onClick={handleFlipModel}
+                disabled={isFlipping}
+              >
+                {isFlipping ? "🔄 Flipping…" : "🔄 Flip Orientation"}
+              </button>
+            )}
           </div>
 
           <div className="viewer-topbar-right">
-            {modelUrlToLoad && (
+            {activeTab !== "accident" && modelUrlToLoad && (
               <a
                 href={modelUrlToLoad}
                 download="scene_textured.glb"
@@ -1163,6 +1291,48 @@ export default function App() {
               onScrollTo3D={() => {
                 document.getElementById("simulation-canvas-section")?.scrollIntoView({ behavior: "smooth" });
               }}
+              roomHeight={roomHeight}
+              dummyHeight={dummyHeightMeters}
+              dummyScale={effectiveDummyScale}
+              dummyHeightMultiplier={dummyHeightMultiplier}
+              onDummyHeightMultiplierChange={setDummyHeightMultiplier}
+            />
+          </div>
+        )}
+
+        {/* ── Top Section: Accident Reconstruction Controls ── */}
+        {activeTab === "accident" && (
+          <div className="recreation-top-container">
+            <AccidentStudio
+              planData={accidentPlanData}
+              onGeneratePlan={handleGenerateAccidentPlan}
+              isPlanning={isAccidentPlanning}
+              currentTime={currentTime}
+              onTimeChange={setCurrentTime}
+              isPlaying={isPlaying}
+              onTogglePlay={() => {
+                if (currentTime >= (accidentPlanData?.plan?.duration || 7)) setCurrentTime(0);
+                setIsPlaying(!isPlaying);
+              }}
+              onRestart={() => {
+                setCurrentTime(0);
+                setIsPlaying(true);
+              }}
+              speed={playbackSpeed}
+              onSpeedChange={setPlaybackSpeed}
+              cameraMode={accidentCameraMode}
+              onCameraModeChange={setAccidentCameraMode}
+              showRoutes={showRoutes}
+              onToggleRoutes={setShowRoutes}
+              showLabels={showLabels}
+              onToggleLabels={setShowLabels}
+              activeCaption={activeCaption}
+              getCanvasElement={() => canvasRef.current || document.querySelector("canvas")}
+              apiKey={geminiApiKey}
+              onApiKeyChange={handleApiKeyChange}
+              onScrollTo3D={() => {
+                document.getElementById("simulation-canvas-section")?.scrollIntoView({ behavior: "smooth" });
+              }}
             />
           </div>
         )}
@@ -1181,10 +1351,11 @@ export default function App() {
         {activeTab !== "threat_detection" && (
           <div
             id="simulation-canvas-section"
-            className={`viewer-canvas ${activeTab === "recreation" ? "recreation-canvas" : ""}`}
+            className={`viewer-canvas ${(activeTab === "recreation" || activeTab === "accident") ? "recreation-canvas" : ""}`}
           >
             <Canvas
               key={modelKey}
+              flat={true}
               camera={{ position: [0, 2.5, 5.5], fov: 55, near: 0.01, far: 500 }}
               style={{ width: "100%", height: "100%" }}
               gl={{ preserveDrawingBuffer: true, antialias: true }}
@@ -1204,49 +1375,26 @@ export default function App() {
                 fadeDistance={35}
               />
 
-              {/* Architectural Grounding Plinth / Forensic Diorama Base */}
-              <group position={[sceneCenter[0], -0.04, sceneCenter[2]]}>
-                <mesh receiveShadow position={[0, -0.02, 0]}>
-                  <cylinderGeometry args={[Math.max(3.8, sceneRadius * 1.35), Math.max(4.0, sceneRadius * 1.4), 0.08, 64]} />
-                  <meshStandardMaterial
-                    color="#141721"
-                    roughness={0.92}
-                    metalness={0.04}
-                  />
-                </mesh>
-                <mesh position={[0, 0.025, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-                  <ringGeometry args={[Math.max(3.7, sceneRadius * 1.32), Math.max(3.75, sceneRadius * 1.35), 64]} />
-                  <meshBasicMaterial color="#38bdf8" opacity={0.3} transparent />
-                </mesh>
-              </group>
-
-              {/* Model if available */}
-              {modelUrlToLoad && (
+              {/* Model if available - ONLY in 3D Photogrammetry Room and Crime tabs */}
+              {activeTab !== "accident" && modelUrlToLoad && (
                 <Suspense fallback={null}>
                   <ModelWithCamera
-                    url={modelUrlToLoad}
+                    key={flipKey}
+                    url={`${modelUrlToLoad}?v=${flipKey}`}
                     controlsRef={controlsRef}
                     onModelInfo={setModelInfo}
                     northOffset={northOffset}
+                    serverBoundaryMarkers={serverBoundaryMarkers}
                   />
                 </Suspense>
               )}
 
-              {/* Fallback room wireframe and compass if no photogrammetry mesh */}
-              {!modelUrlToLoad && (
-                <ForensicSpatialRoom
-                  center={sceneCenter}
-                  radius={sceneRadius}
-                  northOffset={northOffset}
-                  roomSize={modelInfo?.size}
-                />
-              )}
-
-              {/* Direction markers (both 3D Scene and Recreation Studio tabs) */}
-              {compassCalibrated && (
+              {/* 3D Direction Markers - ONLY in 3D Photogrammetry Room and Crime tabs */}
+              {activeTab !== "accident" && compassCalibrated && (
                 <DirectionMarkers
+                  markers={modelInfo?.boundaryMarkers}
                   northOffset={northOffset}
-                  target={sceneCenter}
+                  target={modelInfo?.center || sceneCenter}
                   radius={sceneRadius}
                   roomSize={modelInfo?.size}
                   onSelectDirection={alignCameraToDirection}
@@ -1254,28 +1402,72 @@ export default function App() {
               )}
 
               {/* In 3D Scene tab: show physical room anchors (doors, chairs, table) when enabled */}
-              {activeTab === "3d_scene" && showAnchors && sceneObjects.length > 0 && (
-                <group>
-                  {sceneObjects.map((obj) => (
-                    <SceneAnchorMarker key={obj.id} name={obj.id} anchor={obj} />
-                  ))}
-                </group>
-              )}
+              {activeTab === "3d_scene" && showAnchors && sceneObjects.length > 0 && (() => {
+                const needsTransform = sceneObjects.some(
+                  (o) => o?.pos && Math.abs(o.pos[0]) > ((modelInfo?.bounds?.max?.[0] || 3.0) + 1.5)
+                );
+                const content = sceneObjects.map((obj) => (
+                  <SceneAnchorMarker key={obj.id} name={obj.id} anchor={obj} dummyScale={effectiveDummyScale} />
+                ));
+                return needsTransform ? (
+                  <group
+                    position={modelInfo?.transform?.position || [0, 0, 0]}
+                    scale={modelInfo?.transform?.scale ? [modelInfo.transform.scale, modelInfo.transform.scale, modelInfo.transform.scale] : [1, 1, 1]}
+                  >
+                    {content}
+                  </group>
+                ) : (
+                  <group>{content}</group>
+                );
+              })()}
 
               {/* Forensic Crime Reenactment Simulation with Dummies - in recreation tab */}
-              {activeTab === "recreation" && (planData || sceneObjects.length > 0) && (
-                <ForensicSimulation
-                  plan={planData?.plan}
-                  anchors={planData?.anchors}
-                  physicalObjects={planData?.physicalObjects || sceneObjects}
+              {activeTab === "recreation" && (planData || sceneObjects.length > 0) && (() => {
+                const simNeedsTransform = Boolean(
+                  modelInfo?.transform?.scale &&
+                  modelInfo.transform.scale !== 1.0 &&
+                  planData?.anchors?.chair_s?.pos &&
+                  Math.abs(planData.anchors.chair_s.pos[0]) > ((modelInfo?.bounds?.max?.[0] || 3.0) + 1.5)
+                );
+                const simContent = (
+                  <ForensicSimulation
+                    plan={planData?.plan}
+                    anchors={planData?.anchors}
+                    physicalObjects={planData?.physicalObjects || sceneObjects}
+                    currentTime={currentTime}
+                    cameraMode={cameraMode}
+                    controlsRef={controlsRef}
+                    showRoutes={showRoutes}
+                    showLabels={showLabels}
+                    showAnchors={showAnchors}
+                    center={modelInfo?.center || sceneCenter}
+                    radius={sceneRadius}
+                    roomHeight={roomHeight}
+                    roomSize={modelInfo?.size}
+                    dummyScale={effectiveDummyScale}
+                  />
+                );
+                return simNeedsTransform ? (
+                  <group
+                    position={modelInfo?.transform?.position || [0, 0, 0]}
+                    scale={modelInfo?.transform?.scale ? [modelInfo.transform.scale, modelInfo.transform.scale, modelInfo.transform.scale] : [1, 1, 1]}
+                  >
+                    {simContent}
+                  </group>
+                ) : (
+                  <group>{simContent}</group>
+                );
+              })()}
+
+              {/* Vehicle Accident Simulation inside Canvas */}
+              {activeTab === "accident" && accidentPlanData?.plan && (
+                <AccidentSimulation
+                  plan={accidentPlanData.plan}
                   currentTime={currentTime}
-                  cameraMode={cameraMode}
+                  cameraMode={accidentCameraMode}
                   controlsRef={controlsRef}
                   showRoutes={showRoutes}
                   showLabels={showLabels}
-                  showAnchors={showAnchors}
-                  center={sceneCenter}
-                  radius={sceneRadius}
                 />
               )}
 
@@ -1299,19 +1491,7 @@ export default function App() {
               <Environment preset="city" />
             </Canvas>
 
-            {/* Placeholder when in 3D Scene tab without a model */}
-            {activeTab === "3d_scene" && !modelUrl && (
-              <div className="viewer-placeholder" style={{ zIndex: 10 }}>
-                <BuildingIcon />
-                <p className="placeholder-text">
-                  {isRunning
-                    ? "Reconstruction in progress — model will appear here when ready…"
-                    : 'Upload photos and click "Generate 3D Room" to begin, or switch to Crime Recreation tab.'}
-                </p>
-              </div>
-            )}
-
-            {/* Compass overlay */}
+            {/* Interactive 2D Compass Overlay */}
             <CompassOverlay
               azimuthRef={azimuthRef}
               northOffset={northOffset}
