@@ -642,9 +642,11 @@ def detect_scene_objects(base_dir=None):
 
         if boundary_markers and code in boundary_markers:
             bm_pt = boundary_markers[code]
-            d_px = round(float(bm_pt[0]), 3)
-            d_pz = round(float(bm_pt[2]), 3)
-            d_py = round(float(bm_pt[1]), 3)
+            is_corner = len(code) == 2
+            door_pct = 0.75 if is_corner else 0.80
+            d_px = round(float(center_room_x + door_pct * (bm_pt[0] - center_room_x)), 3)
+            d_pz = round(float(center_room_z + door_pct * (bm_pt[2] - center_room_z)), 3)
+            d_py = get_mesh_flr_y(d_px, d_pz)
         else:
             tx = center_room_x if code in ["N", "S"] else (max_fx - 0.35 if "E" in code else min_fx + 0.35)
             tz = center_room_z if code in ["E", "W"] else (max_fz - 0.35 if "S" in code else min_fz + 0.35)

@@ -402,14 +402,20 @@ export function loadPhysicalSceneObjects(baseDir = null, bounds = null, northOff
       const code = sec.code;
       if (effectiveMarkers[code]) {
         const pt = effectiveMarkers[code];
-        const dPos = [Number(pt[0].toFixed(3)), Number(pt[2].toFixed(3))];
-        const dY = Number((pt[1] ?? 0.02).toFixed(3));
+        // Connect center to direction/diagonal and place door threshold at safe interior percentile (75% for corners, 80% for walls)
+        const isCorner = code.length === 2;
+        const doorPercentile = isCorner ? 0.75 : 0.80;
+        const dPos = [
+          Number((markerCenterX + doorPercentile * (pt[0] - markerCenterX)).toFixed(3)),
+          Number((markerCenterZ + doorPercentile * (pt[2] - markerCenterZ)).toFixed(3))
+        ];
+        const dY = markerFloorY;
         const inwDx = markerCenterX - dPos[0];
         const inwDz = markerCenterZ - dPos[1];
         const inwLen = Math.hypot(inwDx, inwDz) || 1.0;
         const dInw = [Number((inwDx / inwLen).toFixed(3)), Number((inwDz / inwLen).toFixed(3))];
 
-        // Harmonize door at boundary marker
+        // Harmonize door at safe interior threshold
         const doorId = `door_${code.toLowerCase()}`;
         const existingDoor = labelledObjects.find(o => o.id === doorId);
         if (existingDoor) {
@@ -441,8 +447,8 @@ export function loadPhysicalSceneObjects(baseDir = null, bounds = null, northOff
 
         // Harmonize sector chair: dynamically positioned 65% from room center towards boundary marker
         const chairPos = [
-          Number((markerCenterX + 0.65 * (dPos[0] - markerCenterX)).toFixed(3)),
-          Number((markerCenterZ + 0.65 * (dPos[1] - markerCenterZ)).toFixed(3))
+          Number((markerCenterX + 0.65 * (pt[0] - markerCenterX)).toFixed(3)),
+          Number((markerCenterZ + 0.65 * (pt[2] - markerCenterZ)).toFixed(3))
         ];
         const chairDist = Number(Math.hypot(chairPos[0] - markerCenterX, chairPos[1] - markerCenterZ).toFixed(2));
         const chairId = `chair_${code.toLowerCase()}`;

@@ -828,8 +828,14 @@ export function resolveSceneAnchors(script, bounds = null, directionMeta = null,
     for (const [code, aliases] of Object.entries(CARDINAL_DOOR_ALIASES)) {
       if (effectiveMarkers[code]) {
         const bm = effectiveMarkers[code];
-        const bPos = [Number(bm[0].toFixed(3)), Number(bm[2].toFixed(3))];
-        const bY = Number((bm[1] ?? 0.02).toFixed(3));
+        // Connect center to direction/diagonal and place door threshold at safe interior percentile (75% for corners, 80% for walls)
+        const isCorner = code.length === 2;
+        const doorPercentile = isCorner ? 0.75 : 0.80;
+        const bPos = [
+          Number((center[0] + doorPercentile * (bm[0] - center[0])).toFixed(3)),
+          Number((center[1] + doorPercentile * (bm[2] - center[1])).toFixed(3))
+        ];
+        const bY = Number(((bm[1] ?? 0.35) - 0.33).toFixed(3));
         const inwDx = center[0] - bPos[0];
         const inwDz = center[1] - bPos[1];
         const inwLen = Math.hypot(inwDx, inwDz) || 1.0;
@@ -840,6 +846,7 @@ export function resolveSceneAnchors(script, bounds = null, directionMeta = null,
           pos: bPos,
           y: bY,
           inward: bInw,
+          wallPos: [Number(bm[0].toFixed(3)), Number(bm[2].toFixed(3))],
           label: `${labelName} Door [${code}]`,
           type: "door",
           sector: code,
@@ -1364,12 +1371,15 @@ export function generateCrimePlan(script, anchors, bounds, center, grid = null, 
       const anc = anchors[tgt] || anchors["door"] || Object.values(anchors).find(a => a.type === "door") || Object.values(anchors)[0];
       const p = anc.pos;
       const inw = anc.inward;
-      // Start exactly at doorway portal / boundary marker coordinate where marker is placed
+      // Start safely inside room floor at threshold coordinate (75% percentile from center)
       let threshold = [Number(p[0].toFixed(3)), Number(p[1].toFixed(3))];
+      if (navGrid && typeof navGrid.getClosestWalkablePosition === "function") {
+        threshold = navGrid.getClosestWalkablePosition(threshold, center);
+      }
       if (aid === "killer" && navGrid?.clampToFloor) {
         threshold = navGrid.clampToFloor(threshold, 0.18);
       }
-      let stepTarget = [Number((threshold[0] + inw[0] * 0.40).toFixed(3)), Number((threshold[1] + inw[1] * 0.40).toFixed(3))];
+      let stepTarget = [Number((threshold[0] + inw[0] * 0.35).toFixed(3)), Number((threshold[1] + inw[1] * 0.35).toFixed(3))];
       if (aid === "killer" && navGrid?.clampToFloor) {
         stepTarget = navGrid.clampToFloor(stepTarget, 0.22);
       }
@@ -1599,10 +1609,13 @@ export function generateCrimePlan(script, anchors, bounds, center, grid = null, 
       const inw = anc.inward;
       const cur = pos[aid] || center;
       let threshold = [Number(p[0].toFixed(3)), Number(p[1].toFixed(3))];
+      if (navGrid && typeof navGrid.getClosestWalkablePosition === "function") {
+        threshold = navGrid.getClosestWalkablePosition(threshold, center);
+      }
       if (aid === "killer" && navGrid?.clampToFloor) {
         threshold = navGrid.clampToFloor(threshold, 0.18);
       }
-      let stepTarget = [Number((threshold[0] + inw[0] * 0.40).toFixed(3)), Number((threshold[1] + inw[1] * 0.40).toFixed(3))];
+      let stepTarget = [Number((threshold[0] + inw[0] * 0.35).toFixed(3)), Number((threshold[1] + inw[1] * 0.35).toFixed(3))];
       if (aid === "killer" && navGrid?.clampToFloor) {
         stepTarget = navGrid.clampToFloor(stepTarget, 0.22);
       }
