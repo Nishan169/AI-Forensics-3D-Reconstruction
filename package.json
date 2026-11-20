@@ -8,6 +8,7 @@
     "start": "node server.js",
     "dev": "node server.js",
     "threat:backend": "cd threat_backend && ./venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8000",
+    "threat:backend:win": "cd threat_backend && .\\venv\\Scripts\\python -m uvicorn main:app --host 127.0.0.1 --port 8000",
     "frontend": "npm --prefix frontend run dev",
     "build": "npm --prefix frontend run build"
   },
